@@ -1,17 +1,17 @@
 # Trackchain-DBMS-II
-trackchain/
-├── sql/
-│   ├── schema/          # CREATE TABLE statements
-│   ├── functions/       # PL/pgSQL functions
-│   ├── procedures/      # PL/pgSQL stored procedures
-│   ├── triggers/        # Trigger definitions
-│   └── seed/            # Sample/seed data
-├── frontend/
-│   ├── index.html
-│   ├── css/
-│   └── js/
-├── docs/
-│   ├── ERD.png
-│   └── TrackChain.pdf   # Project proposal slides
-├── .devcontainer/        # Codespace configuration
-└── README.md
+trackchain/ <br>
+├── sql/ <br> 
+│   ├── schema/          # CREATE TABLE statements <br>
+│   ├── functions/       # PL/pgSQL functions  <br>
+│   ├── procedures/      # PL/pgSQL stored procedures <br>
+│   ├── triggers/        # Trigger definitions <br>
+│   └── seed/            # Sample/seed data  <br>
+├── frontend/ <br>
+│   ├── index.html <br>
+│   ├── css/ <br>
+│   └── js/ <br>
+├── docs/ <br>
+│   ├── ERD.png <br>
+│   └── TrackChain.pdf   # Project proposal slides <br>
+├── .devcontainer/        # Codespace configuration <br>
+└── README.md <br>
