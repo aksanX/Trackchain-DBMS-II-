@@ -1,0 +1,7 @@
+# Never commit your real Supabase keys
+frontend/js/config.js
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
