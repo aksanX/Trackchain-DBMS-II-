@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Inventory</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Inventory</h1>
+                <p>Stock on hand across every warehouse.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <section class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total products</div>
+                    <div class="stat-value" id="kpi-products">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total stock</div>
+                    <div class="stat-value" id="kpi-stock">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Low stock</div>
+                    <div class="stat-value" id="kpi-low">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Out of stock</div>
+                    <div class="stat-value" id="kpi-out">—</div>
+                </div>
+            </section>
+
+            <div class="page-tabs">
+                <button type="button" class="active" data-tab="panel-current">Current Stock</button>
+                <button type="button" data-tab="panel-low">Low Stock</button>
+            </div>
+
+            <div id="panel-current" class="tab-panel active">
+                <div class="card full-width">
+                    <h2>Current stock</h2>
+                    <div class="toolbar">
+                        <input type="text" id="stock-search" class="search-input" placeholder="Search product or warehouse…">
+                    </div>
+                    <div class="table-responsive">
+                        <table id="stock-table">
+                            <thead><tr><th>Product</th><th>Category</th><th>Warehouse</th><th>Quantity</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="panel-low" class="tab-panel">
+                <div class="card full-width">
+                    <h2>Low stock <span class="card-subtitle" style="margin:0; display:inline;">&nbsp;&mdash;&nbsp;below 10 units</span></h2>
+                    <div class="table-responsive">
+                        <table id="low-stock-table">
+                            <thead><tr><th>Product</th><th>Quantity</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("inventory");
+initPageTabs(".page-tabs");
+
+let allStock = [];
+
+function renderStockRows(rows) {
+    fillTable("stock-table", rows, r => `
+        <td>${escapeHtml(r.product?.name ?? "-")}</td>
+        <td>${escapeHtml(r.product?.category) || "-"}</td>
+        <td>${escapeHtml(r.warehouse?.name ?? "-")}</td>
+        <td>${r.quantity === 0 ? `<span class="badge badge-critical">0</span>` : r.quantity}</td>
+    `, 4);
+}
+
+async function loadStock() {
+    const { data, error } = await supabaseClient
+        .from("inventory")
+        .select("quantity, product:product_id(name, category), warehouse:warehouse_id(name)")
+        .order("quantity", { ascending: true });
+    if (error) { console.error(error); return; }
+    allStock = data || [];
+    renderStockRows(allStock);
+
+    const { count: productCount } = await supabaseClient.from("product").select("*", { count: "exact", head: true });
+    const totalStock = allStock.reduce((s, r) => s + r.quantity, 0);
+    const outOfStock = allStock.filter(r => r.quantity === 0).length;
+    document.getElementById("kpi-products").textContent = productCount ?? "-";
+    document.getElementById("kpi-stock").textContent = totalStock.toLocaleString();
+    document.getElementById("kpi-out").textContent = outOfStock;
+}
+
+async function loadLowStock() {
+    const { data, error } = await supabaseClient.rpc("low_stock_products", { p_threshold: 10 });
+    if (error) { console.error(error); return; }
+    fillTable("low-stock-table", data, r =>
+        `<td>${escapeHtml(r.product_name)}</td><td><span class="badge badge-warning">${r.quantity} left</span></td>`, 2);
+    document.getElementById("kpi-low").textContent = (data || []).length;
+}
+
+document.getElementById("stock-search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderStockRows(allStock); return; }
+    renderStockRows(allStock.filter(r =>
+        (r.product?.name || "").toLowerCase().includes(q) ||
+        (r.warehouse?.name || "").toLowerCase().includes(q)
+    ));
+});
+
+loadStock();
+loadLowStock();
+</script>
+
+</body>
+</html>
