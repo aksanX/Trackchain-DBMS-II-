@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Reports</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Reports</h1>
+                <p>The database's own analytics views, ready to read or export.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <div class="toolbar">
+                    <h2 style="margin:0;">Campaign performance</h2>
+                    <button type="button" class="btn-ghost btn-small" data-export="campaign-performance-table">Export CSV</button>
+                </div>
+                <div class="table-responsive">
+                    <table id="campaign-performance-table">
+                        <thead><tr><th>Campaign</th><th>Platform</th><th>Clicks</th><th>Orders</th><th>Revenue</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card full-width">
+                <div class="toolbar">
+                    <h2 style="margin:0;">Platform performance</h2>
+                    <button type="button" class="btn-ghost btn-small" data-export="platform-performance-table">Export CSV</button>
+                </div>
+                <div class="table-responsive">
+                    <table id="platform-performance-table">
+                        <thead><tr><th>Platform</th><th>Clicks</th><th>Orders</th><th>Revenue</th><th>Conversion %</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card full-width">
+                <div class="toolbar">
+                    <h2 style="margin:0;">Supplier product count</h2>
+                    <button type="button" class="btn-ghost btn-small" data-export="supplier-count-table">Export CSV</button>
+                </div>
+                <div class="table-responsive">
+                    <table id="supplier-count-table">
+                        <thead><tr><th>Supplier</th><th>Products</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("reports");
+
+async function loadCampaignPerformance() {
+    const { data, error } = await supabaseClient.from("campaign_performance").select("*");
+    if (error) { console.error(error); return; }
+    fillTable("campaign-performance-table", data, r =>
+        `<td>${escapeHtml(r.campaign_name)}</td><td>${platformBadge(r.platform)}</td><td>${r.total_clicks}</td><td>${r.total_orders}</td><td>${formatMoney(r.total_revenue)}</td>`, 5);
+}
+
+async function loadPlatformPerformance() {
+    const { data, error } = await supabaseClient.from("platform_performance").select("*");
+    if (error) { console.error(error); return; }
+    fillTable("platform-performance-table", data, r => {
+        const conv = r.total_clicks > 0 ? ((r.total_orders / r.total_clicks) * 100).toFixed(1) : "0.0";
+        return `<td>${platformBadge(r.platform)}</td><td>${r.total_clicks}</td><td>${r.total_orders}</td><td>${formatMoney(r.total_revenue)}</td><td>${conv}%</td>`;
+    }, 5);
+}
+
+async function loadSupplierCounts() {
+    const { data, error } = await supabaseClient.from("supplier_product_count").select("*");
+    if (error) { console.error(error); return; }
+    fillTable("supplier-count-table", data, r => `<td>${escapeHtml(r.name)}</td><td>${r.product_count}</td>`, 2);
+}
+
+function exportTableToCsv(tableId) {
+    const table = document.getElementById(tableId);
+    const rows = Array.from(table.querySelectorAll("tr"));
+    const csv = rows.map(row =>
+        Array.from(row.children).map(cell => `"${cell.textContent.replace(/"/g, '""').trim()}"`).join(",")
+    ).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${tableId}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+document.querySelectorAll("[data-export]").forEach(btn =>
+    btn.addEventListener("click", () => exportTableToCsv(btn.dataset.export)));
+
+loadCampaignPerformance();
+loadPlatformPerformance();
+loadSupplierCounts();
+</script>
+
+</body>
+</html>

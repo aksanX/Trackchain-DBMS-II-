@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Audit Logs</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Audit Logs</h1>
+                <p>Every insert/update/delete on orders, inventory and purchases, written automatically by database triggers.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+            <div class="card full-width">
+                <div class="toolbar">
+                    <div class="page-tabs" id="table-filter">
+                        <button type="button" class="active" data-table="">All tables</button>
+                        <button type="button" data-table="order">Orders</button>
+                        <button type="button" data-table="inventory">Inventory</button>
+                        <button type="button" data-table="purchase">Purchases</button>
+                    </div>
+                    <select id="operation-filter" style="max-width:180px; margin:0;">
+                        <option value="">All operations</option>
+                        <option value="INSERT">INSERT</option>
+                        <option value="UPDATE">UPDATE</option>
+                        <option value="DELETE">DELETE</option>
+                    </select>
+                </div>
+                <div class="table-responsive">
+                    <table id="audit-table">
+                        <thead><tr><th>Time</th><th>Table</th><th>Operation</th><th>Record ID</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("audit-logs");
+
+let allLogs = [];
+let tableFilter = "";
+
+function opClass(op) {
+    if (op === "INSERT") return "badge-status-delivered";
+    if (op === "UPDATE") return "badge-warning";
+    if (op === "DELETE") return "badge-critical";
+    return "badge-neutral";
+}
+
+function renderLogs() {
+    const opFilter = document.getElementById("operation-filter").value;
+    let rows = allLogs;
+    if (tableFilter) rows = rows.filter(r => r.table_name === tableFilter);
+    if (opFilter) rows = rows.filter(r => r.operation === opFilter);
+
+    fillTable("audit-table", rows, r =>
+        `<td>${formatDateTime(r.log_time)}</td><td><span class="code-badge">${escapeHtml(r.table_name)}</span></td><td><span class="badge ${opClass(r.operation)}">${r.operation}</span></td><td>#${r.record_id}</td>`
+    , 4);
+}
+
+async function loadAuditLogs() {
+    const { data, error } = await supabaseClient
+        .from("audit_log")
+        .select("*")
+        .order("log_time", { ascending: false })
+        .limit(200);
+    if (error) { console.error(error); return; }
+    allLogs = data || [];
+    renderLogs();
+}
+
+document.querySelectorAll("#table-filter button").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll("#table-filter button").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        tableFilter = btn.dataset.table;
+        renderLogs();
+    });
+});
+
+document.getElementById("operation-filter").addEventListener("change", renderLogs);
+
+loadAuditLogs();
+</script>
+
+</body>
+</html>

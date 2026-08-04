@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere Store</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="public-page">
+
+<header>
+    <h1>SupplySphere Store</h1>
+</header>
+
+<main class="container" style="max-width: 1100px;">
+    <div id="attribution-banner" style="display:none;" class="attribution-banner">
+        <span id="attribution-text"></span>
+    </div>
+
+    <div class="product-grid" id="product-grid"></div>
+</main>
+
+<div class="modal-backdrop hidden" id="buy-modal">
+    <div class="modal">
+        <h2 id="modal-product-name">Buy product</h2>
+        <p class="modal-subtitle" id="modal-product-price"></p>
+        <form id="buy-form">
+            <label for="buyer-name">Your name</label>
+            <input type="text" id="buyer-name" required>
+            <label for="buyer-phone">Phone number</label>
+            <input type="text" id="buyer-phone" required>
+            <label for="buy-quantity">Quantity</label>
+            <input type="number" id="buy-quantity" min="1" value="1" required>
+            <button type="submit">Confirm order</button>
+            <button type="button" class="btn-ghost" id="buy-cancel" style="width:100%; margin-top:10px; text-align:center;">Cancel</button>
+        </form>
+        <div id="buy-status" class="status-msg"></div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+const highlightProductId = urlParams.get("product");
+const arrivalCode = urlParams.get("code");
+
+let attributedLinkId = null;
+let selectedProduct = null;
+
+async function showAttributionBanner() {
+    if (!arrivalCode) return;
+    const { data: link } = await supabaseClient
+        .from("tracking_link")
+        .select("link_id, platform, campaign:campaign_id(campaign_name)")
+        .eq("short_code", arrivalCode)
+        .single();
+    if (!link) return;
+    attributedLinkId = link.link_id;
+    const banner = document.getElementById("attribution-banner");
+    document.getElementById("attribution-text").innerHTML =
+        `You arrived via <strong>${link.platform}</strong>` + (link.campaign ? ` — ${link.campaign.campaign_name}` : "");
+    banner.style.display = "flex";
+}
+
+async function loadProducts() {
+    const { data: products, error } = await supabaseClient
+        .from("product")
+        .select("product_id, name, category, price")
+        .order("name");
+    if (error) { console.error(error); return; }
+
+    const { data: inventory } = await supabaseClient.from("inventory").select("product_id, quantity");
+    const stockByProduct = {};
+    (inventory || []).forEach(i => { stockByProduct[i.product_id] = (stockByProduct[i.product_id] || 0) + i.quantity; });
+
+    const grid = document.getElementById("product-grid");
+    grid.innerHTML = (products || []).map(p => {
+        const stock = stockByProduct[p.product_id] || 0;
+        const highlighted = highlightProductId && String(p.product_id) === String(highlightProductId);
+        return `
+        <div class="product-card${highlighted ? " highlighted" : ""}" id="product-${p.product_id}">
+            <div class="product-category">${p.category ? escapeHtml(p.category) : "Product"}</div>
+            <div class="product-name">${escapeHtml(p.name)}</div>
+            <div class="product-price">${formatMoney(p.price)}</div>
+            <div class="product-stock">${stock > 0 ? stock + " in stock" : "Out of stock"}</div>
+            <button type="button" class="buy-btn" data-id="${p.product_id}" data-name="${escapeHtml(p.name)}" data-price="${p.price}" ${stock === 0 ? "disabled" : ""}>
+                ${stock === 0 ? "Out of stock" : "Buy"}
+            </button>
+        </div>`;
+    }).join("");
+
+    grid.querySelectorAll(".buy-btn").forEach(btn => btn.addEventListener("click", () => openBuyModal(btn)));
+
+    if (highlightProductId) {
+        const el = document.getElementById(`product-${highlightProductId}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+}
+
+function openBuyModal(btn) {
+    selectedProduct = { id: btn.dataset.id, name: btn.dataset.name, price: btn.dataset.price };
+    document.getElementById("modal-product-name").textContent = `Buy ${selectedProduct.name}`;
+    document.getElementById("modal-product-price").textContent = `${formatMoney(selectedProduct.price)} each`;
+    document.getElementById("buy-status").textContent = "";
+    document.getElementById("buy-status").className = "status-msg";
+    document.getElementById("buy-form").reset();
+    document.getElementById("buy-quantity").value = 1;
+    document.getElementById("buy-modal").classList.remove("hidden");
+}
+
+document.getElementById("buy-cancel").addEventListener("click", () => {
+    document.getElementById("buy-modal").classList.add("hidden");
+});
+
+document.getElementById("buy-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("buy-status");
+    statusDiv.textContent = "Placing order…";
+    statusDiv.className = "status-msg";
+
+    const name = document.getElementById("buyer-name").value.trim();
+    const phone = document.getElementById("buyer-phone").value.trim();
+    const quantity = parseInt(document.getElementById("buy-quantity").value);
+
+    // Guest checkout: match an existing customer by phone, or create one.
+    let customerId;
+    const { data: existing } = await supabaseClient
+        .from("customer")
+        .select("customer_id")
+        .eq("contact", phone)
+        .maybeSingle();
+
+    if (existing) {
+        customerId = existing.customer_id;
+    } else {
+        const { data: created, error: createError } = await supabaseClient
+            .from("customer")
+            .insert({ name, contact: phone })
+            .select()
+            .single();
+        if (createError) {
+            statusDiv.textContent = "Error: " + createError.message;
+            statusDiv.className = "status-msg status-error";
+            return;
+        }
+        customerId = created.customer_id;
+    }
+
+    const { data: orderId, error } = await supabaseClient.rpc("place_order_api", {
+        p_customer_id: customerId,
+        p_tracking_link_id: attributedLinkId,
+        p_product_id: parseInt(selectedProduct.id),
+        p_quantity: quantity
+    });
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = `Order placed! Order ID: ${orderId}. We'll text ${phone} with tracking details.`;
+    statusDiv.className = "status-msg status-ok";
+    loadProducts();
+});
+
+showAttributionBanner();
+loadProducts();
+</script>
+
+</body>
+</html>

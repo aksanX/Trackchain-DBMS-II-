@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Campaign Management</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Campaign Management</h1>
+                <p>Create campaigns, generate a tracking link per platform, and see what each one drives.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="page-tabs">
+                <button type="button" class="active" data-tab="tab-campaigns">Campaigns</button>
+                <button type="button" data-tab="tab-links">Tracking Links</button>
+                <button type="button" data-tab="tab-analytics">Click Analytics</button>
+            </div>
+
+            <div id="tab-campaigns" class="tab-panel active">
+                <div class="card full-width">
+                    <h2>Create campaign</h2>
+                    <form id="campaign-form">
+                        <div class="form-row two-col">
+                            <div>
+                                <label for="campaign-name">Campaign name</label>
+                                <input type="text" id="campaign-name" placeholder="Summer Sale 2026" required>
+                            </div>
+                            <div>
+                                <label for="campaign-product">Product</label>
+                                <select id="campaign-product" required></select>
+                            </div>
+                        </div>
+                        <label>Platforms</label>
+                        <div class="checkbox-group" id="platform-checkboxes">
+                            <label class="checkbox-pill"><input type="checkbox" name="platform" value="Facebook" checked> Facebook</label>
+                            <label class="checkbox-pill"><input type="checkbox" name="platform" value="Instagram" checked> Instagram</label>
+                            <label class="checkbox-pill"><input type="checkbox" name="platform" value="WhatsApp" checked> WhatsApp</label>
+                            <label class="checkbox-pill"><input type="checkbox" name="platform" value="Email" checked> Email</label>
+                        </div>
+                        <div class="form-row two-col">
+                            <div>
+                                <label for="campaign-start">Start date</label>
+                                <input type="date" id="campaign-start" required>
+                            </div>
+                            <div>
+                                <label for="campaign-end">End date</label>
+                                <input type="date" id="campaign-end" required>
+                            </div>
+                        </div>
+                        <button type="submit">Create campaign &amp; generate links</button>
+                    </form>
+                    <div id="campaign-status" class="status-msg"></div>
+                    <div id="link-results" class="link-results"></div>
+                </div>
+
+                <div class="card full-width">
+                    <h2>Campaigns</h2>
+                    <div class="table-responsive">
+                        <table id="campaign-table">
+                            <thead>
+                                <tr><th>Campaign</th><th>Product</th><th>Start</th><th>End</th><th>Clicks</th><th>Orders</th><th>Revenue</th><th></th></tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card full-width" id="campaign-details-card" style="display:none;">
+                    <h2 id="campaign-details-title">Campaign links</h2>
+                    <div class="table-responsive">
+                        <table id="campaign-details-table">
+                            <thead><tr><th>Platform</th><th>Link</th><th>Clicks</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="tab-links" class="tab-panel">
+                <div class="card full-width">
+                    <h2>Tracking links</h2>
+                    <p class="card-subtitle">Every link points to the same product page — only the platform changes.</p>
+                    <div class="table-responsive">
+                        <table id="links-table">
+                            <thead><tr><th>Short code</th><th>Platform</th><th>Campaign</th><th>Destination</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="tab-analytics" class="tab-panel">
+                <div class="chart-row">
+                    <div class="card">
+                        <h2>Clicks by platform</h2>
+                        <div class="chart-container"><canvas id="chart-clicks-platform"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <h2>Clicks by country</h2>
+                        <div class="chart-container"><canvas id="chart-clicks-country"></canvas></div>
+                    </div>
+                </div>
+                <div class="chart-row">
+                    <div class="card">
+                        <h2>Clicks by device</h2>
+                        <div class="chart-container"><canvas id="chart-clicks-device"></canvas></div>
+                    </div>
+                    <div class="card">
+                        <h2>Recent clicks <span class="card-subtitle" style="margin:0; display:inline;">&nbsp;&mdash;&nbsp;live</span></h2>
+                        <div style="display:flex; justify-content:flex-end; margin-top:-44px; margin-bottom: 16px;">
+                            <button class="btn-ghost" id="refresh-clicks" type="button">Refresh</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="clicks-table">
+                                <thead><tr><th>Time</th><th>Code</th><th>Platform</th><th>Country</th></tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("campaigns");
+initPageTabs(".page-tabs");
+
+function barChart(canvasId, labels, data, colors, existing) {
+    if (existing) existing.destroy();
+    return new Chart(document.getElementById(canvasId), {
+        type: "bar",
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderRadius: 6, maxBarThickness: 42 }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: "#52514e" } },
+                y: { beginAtZero: true, grid: { color: "#e1e0d9" }, ticks: { color: "#898781" } }
+            }
+        }
+    });
+}
+
+async function loadProductsDropdown() {
+    const { data } = await supabaseClient.from("product").select("product_id, name").order("name");
+    document.getElementById("campaign-product").innerHTML =
+        (data || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+}
+
+async function loadCampaigns() {
+    const { data: campaigns, error: campErr } = await supabaseClient
+        .from("campaign")
+        .select("campaign_id, campaign_name, start_date, end_date, product:product_id(name)")
+        .order("campaign_id", { ascending: false });
+    if (campErr) { console.error(campErr); return; }
+
+    const { data: perf, error: perfErr } = await supabaseClient.from("campaign_performance").select("*");
+    if (perfErr) { console.error(perfErr); return; }
+
+    const totals = {};
+    (perf || []).forEach(r => {
+        if (!totals[r.campaign_id]) totals[r.campaign_id] = { clicks: 0, orders: 0, revenue: 0 };
+        totals[r.campaign_id].clicks += r.total_clicks || 0;
+        totals[r.campaign_id].orders += r.total_orders || 0;
+        totals[r.campaign_id].revenue += Number(r.total_revenue) || 0;
+    });
+
+    const rows = (campaigns || []).map(c => ({
+        ...c,
+        ...(totals[c.campaign_id] || { clicks: 0, orders: 0, revenue: 0 })
+    }));
+
+    fillTable("campaign-table", rows, r => `
+        <td>${escapeHtml(r.campaign_name)}</td>
+        <td>${escapeHtml(r.product?.name ?? "-")}</td>
+        <td>${formatDate(r.start_date)}</td>
+        <td>${formatDate(r.end_date)}</td>
+        <td>${r.clicks}</td>
+        <td>${r.orders}</td>
+        <td>${formatMoney(r.revenue)}</td>
+        <td><button type="button" class="btn-ghost btn-small view-links-btn" data-id="${r.campaign_id}" data-name="${escapeHtml(r.campaign_name)}">View links</button></td>
+    `, 8);
+
+    document.querySelectorAll(".view-links-btn").forEach(btn =>
+        btn.addEventListener("click", () => showCampaignDetails(btn.dataset.id, btn.dataset.name)));
+}
+
+async function showCampaignDetails(campaignId, campaignName) {
+    const { data: links, error } = await supabaseClient
+        .from("tracking_link")
+        .select("link_id, short_code, platform, destination_url")
+        .eq("campaign_id", campaignId);
+    if (error) { console.error(error); return; }
+
+    const linkIds = (links || []).map(l => l.link_id);
+    let clickCounts = {};
+    if (linkIds.length) {
+        const { data: clicks } = await supabaseClient.from("click").select("link_id").in("link_id", linkIds);
+        (clicks || []).forEach(c => { clickCounts[c.link_id] = (clickCounts[c.link_id] || 0) + 1; });
+    }
+
+    document.getElementById("campaign-details-title").textContent = `${campaignName} — tracking links`;
+    fillTable("campaign-details-table", links, l => {
+        const demoPath = `/storefront/redirect.html?code=${l.short_code}`;
+        return `
+            <td>${platformBadge(l.platform)}</td>
+            <td><span class="link-url">track.supplysphere.com/${escapeHtml(l.short_code)}</span></td>
+            <td>${clickCounts[l.link_id] || 0}</td>
+            <td>
+                <a href="${demoPath}" target="_blank" rel="noopener"><button type="button" class="btn-ghost btn-small">Test link &rarr;</button></a>
+            </td>
+        `;
+    }, 4);
+
+    document.getElementById("campaign-details-card").style.display = "block";
+    document.getElementById("campaign-details-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function loadTrackingLinks() {
+    const { data, error } = await supabaseClient
+        .from("tracking_link")
+        .select("link_id, short_code, platform, destination_url, campaign:campaign_id(campaign_name)")
+        .order("link_id", { ascending: false });
+    if (error) { console.error(error); return; }
+    fillTable("links-table", data, r =>
+        `<td><span class="code-badge">${escapeHtml(r.short_code)}</span></td><td>${platformBadge(r.platform)}</td><td>${escapeHtml(r.campaign?.campaign_name) ?? "-"}</td><td>${escapeHtml(r.destination_url)}</td>`
+    , 4);
+}
+
+document.getElementById("campaign-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("campaign-status");
+    const resultsDiv = document.getElementById("link-results");
+    resultsDiv.innerHTML = "";
+
+    const checkedPlatforms = Array.from(document.querySelectorAll('#platform-checkboxes input[name="platform"]:checked')).map(cb => cb.value);
+    if (checkedPlatforms.length === 0) {
+        statusDiv.textContent = "Select at least one platform.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = "Creating campaign…";
+    statusDiv.className = "status-msg";
+
+    const campaignName = document.getElementById("campaign-name").value.trim();
+    const productId = parseInt(document.getElementById("campaign-product").value);
+    const startDate = document.getElementById("campaign-start").value;
+    const endDate = document.getElementById("campaign-end").value;
+
+    const { data: campaign, error: campaignError } = await supabaseClient
+        .from("campaign")
+        .insert({ campaign_name: campaignName, product_id: productId, start_date: startDate, end_date: endDate })
+        .select()
+        .single();
+
+    if (campaignError) {
+        statusDiv.textContent = "Error: " + campaignError.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    const destinationUrl = `/storefront/product.html?product=${productId}`;
+    const linkRows = checkedPlatforms.map(platform => ({
+        campaign_id: campaign.campaign_id,
+        platform,
+        destination_url: destinationUrl
+    }));
+
+    const { data: links, error: linksError } = await supabaseClient.from("tracking_link").insert(linkRows).select();
+
+    if (linksError) {
+        statusDiv.textContent = "Campaign created, but link generation failed: " + linksError.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = `Campaign "${campaignName}" created — ${links.length} tracking link(s) generated below.`;
+    statusDiv.className = "status-msg status-ok";
+
+    const orderedLinks = PLATFORMS.map(p => links.find(l => l.platform === p)).filter(Boolean);
+    resultsDiv.innerHTML = orderedLinks.map(l => {
+        const demoPath = `/storefront/redirect.html?code=${l.short_code}`;
+        const demoAbsolute = new URL(demoPath, window.location.href).href;
+        return `
+        <div class="link-row">
+            <div>
+                ${platformBadge(l.platform)}
+                <span class="link-url">track.supplysphere.com/${l.short_code}</span>
+            </div>
+            <div class="link-actions">
+                <button type="button" class="btn-ghost copy-link" data-url="${demoAbsolute}">Copy</button>
+                <a href="${demoPath}" target="_blank" rel="noopener"><button type="button" class="btn-small" style="margin-top:0;">Test this link &rarr;</button></a>
+            </div>
+        </div>`;
+    }).join("");
+
+    resultsDiv.querySelectorAll(".copy-link").forEach(btn => {
+        btn.addEventListener("click", async () => {
+            await navigator.clipboard.writeText(btn.dataset.url);
+            const original = btn.textContent;
+            btn.textContent = "Copied!";
+            setTimeout(() => { btn.textContent = original; }, 1500);
+        });
+    });
+
+    document.getElementById("campaign-form").reset();
+    document.querySelectorAll('#platform-checkboxes input[name="platform"]').forEach(cb => cb.checked = true);
+    loadCampaigns();
+    loadTrackingLinks();
+});
+
+// ---- Click Analytics tab ----
+let platformChart, countryChart, deviceChart;
+
+async function loadClickAnalytics() {
+    const { data, error } = await supabaseClient.from("platform_performance").select("*");
+    if (!error && data) {
+        const ordered = PLATFORMS.map(p => data.find(r => r.platform === p)).filter(Boolean);
+        platformChart = barChart("chart-clicks-platform", ordered.map(r => r.platform), ordered.map(r => r.total_clicks),
+            ordered.map(r => PLATFORM_COLOR[r.platform]), platformChart);
+    }
+
+    const { data: clicks } = await supabaseClient.from("click").select("country, device");
+    if (clicks) {
+        const byCountry = {};
+        clicks.forEach(c => { const k = c.country || "Unknown"; byCountry[k] = (byCountry[k] || 0) + 1; });
+        const countryRows = Object.entries(byCountry).sort((a, b) => b[1] - a[1]).slice(0, 8);
+        countryChart = barChart("chart-clicks-country", countryRows.map(r => r[0]), countryRows.map(r => r[1]), "#eb6834", countryChart);
+
+        const byDevice = {};
+        clicks.forEach(c => {
+            const d = (c.device || "").toLowerCase();
+            let bucket = "Desktop";
+            if (d.includes("android") || d.includes("mobile")) bucket = "Android";
+            else if (d.includes("iphone")) bucket = "iOS";
+            else if (d.includes("ipad") || d.includes("tablet")) bucket = "Tablet";
+            byDevice[bucket] = (byDevice[bucket] || 0) + 1;
+        });
+        const deviceRows = Object.entries(byDevice).sort((a, b) => b[1] - a[1]);
+        deviceChart = barChart("chart-clicks-device", deviceRows.map(r => r[0]), deviceRows.map(r => r[1]), "#1baf7a", deviceChart);
+    }
+}
+
+let lastSeenClickId = null;
+
+async function loadRecentClicks() {
+    const { data, error } = await supabaseClient
+        .from("click")
+        .select("click_id, click_time, country, device, tracking_link:link_id(short_code, platform)")
+        .order("click_time", { ascending: false })
+        .limit(20);
+    if (error) { console.error(error); return; }
+
+    const tbody = document.querySelector("#clicks-table tbody");
+    tbody.innerHTML = "";
+    if (!data || data.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4">No clicks yet</td></tr>`;
+        return;
+    }
+    data.forEach(r => {
+        const tr = document.createElement("tr");
+        const time = new Date(r.click_time).toLocaleString();
+        tr.innerHTML = `<td>${time}</td><td><span class="code-badge">${escapeHtml(r.tracking_link?.short_code) ?? "-"}</span></td><td>${platformBadge(r.tracking_link?.platform)}</td><td>${escapeHtml(r.country) || "-"}</td>`;
+        if (lastSeenClickId !== null && r.click_id > lastSeenClickId) tr.classList.add("row-new");
+        tbody.appendChild(tr);
+    });
+    lastSeenClickId = Math.max(...data.map(r => r.click_id));
+}
+
+function refreshLiveData() {
+    loadRecentClicks();
+    loadClickAnalytics();
+    loadCampaigns();
+}
+
+document.getElementById("refresh-clicks").addEventListener("click", refreshLiveData);
+
+loadProductsDropdown();
+loadCampaigns();
+loadTrackingLinks();
+loadClickAnalytics();
+loadRecentClicks();
+setInterval(refreshLiveData, 6000);
+</script>
+
+</body>
+</html>

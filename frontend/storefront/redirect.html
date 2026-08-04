@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redirecting…</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="public-page">
+
+<main class="container" style="justify-content: center; align-items: center; flex: 1;">
+    <div class="card center-card">
+        <div id="spinner" class="spinner"></div>
+        <div id="icon" style="display:none; font-size:34px; margin: 4px auto 14px;"></div>
+        <h2 id="headline">Redirecting you to the product…</h2>
+        <p id="status">Please wait...</p>
+        <div id="manual-continue" style="display:none; margin-top: 8px;">
+            <a id="continue-link" href="#"><button type="button">Continue to product &rarr;</button></a>
+        </div>
+    </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script>
+async function handleRedirect() {
+    const statusEl = document.getElementById("status");
+    const headlineEl = document.getElementById("headline");
+    const spinnerEl = document.getElementById("spinner");
+    const iconEl = document.getElementById("icon");
+    const continueWrap = document.getElementById("manual-continue");
+    const continueLink = document.getElementById("continue-link");
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+
+    function showError(headline, message) {
+        spinnerEl.style.display = "none";
+        iconEl.textContent = "⚠️";
+        iconEl.style.display = "block";
+        headlineEl.textContent = headline;
+        statusEl.textContent = message;
+    }
+
+    if (!code) {
+        showError("No tracking code", "This link is missing a ?code= tracking parameter.");
+        return;
+    }
+
+    // 1. Look up the tracking link by its short_code (also pull platform +
+    // campaign name so we can show a real confirmation, not just a spinner).
+    const { data: link, error: linkError } = await supabaseClient
+        .from("tracking_link")
+        .select("link_id, destination_url, platform, campaign:campaign_id(campaign_name)")
+        .eq("short_code", code)
+        .single();
+
+    if (linkError || !link) {
+        showError("Unknown tracking code", `No tracking link found for "${code}". ${linkError ? linkError.message : ""}`);
+        return;
+    }
+
+    // 2. Get the visitor's country from a free IP geolocation API.
+    // IMPORTANT: this call is given a hard timeout via AbortController.
+    // Without one, a slow or rate-limited response from ipapi.co would
+    // hang indefinitely and the click below would never get logged --
+    // this is exactly what was silently breaking click tracking before.
+    let country = "Unknown";
+    const geoController = new AbortController();
+    const geoTimeout = setTimeout(() => geoController.abort(), 2500);
+    try {
+        const geoRes = await fetch("https://ipapi.co/json/", { signal: geoController.signal });
+        const geoData = await geoRes.json();
+        country = geoData.country_name || "Unknown";
+    } catch (e) {
+        console.warn("Geolocation lookup failed or timed out, continuing without it.", e);
+    } finally {
+        clearTimeout(geoTimeout);
+    }
+
+    // 3. Log the click (click_time fills itself in via the table default).
+    // IMPORTANT: check the error -- silently ignoring it would mean a
+    // failed insert looks identical to a working one from the outside.
+    const { error: clickError } = await supabaseClient.from("click").insert({
+        link_id: link.link_id,
+        country: country,
+        device: navigator.userAgent
+    });
+
+    // 4. Destination the customer eventually lands on, carrying the
+    // tracking code forward so the storefront can attribute an order to it.
+    const destUrl = new URL(link.destination_url, window.location.href);
+    destUrl.searchParams.set("code", code);
+    continueLink.href = destUrl.href;
+
+    if (clickError) {
+        showError("Click could not be logged", clickError.message);
+        continueWrap.style.display = "block";
+        return;
+    }
+
+    spinnerEl.style.display = "none";
+    iconEl.textContent = "✅";
+    iconEl.style.display = "block";
+    headlineEl.textContent = "Click recorded";
+    const campaignPart = link.campaign ? ` — ${link.campaign.campaign_name}` : "";
+    statusEl.textContent = `Logged via ${link.platform}${campaignPart}. Redirecting…`;
+    continueWrap.style.display = "block";
+
+    // Give the tester a moment to actually see the confirmation before we
+    // navigate away -- an instant redirect made it impossible to tell
+    // whether the click was ever recorded.
+    setTimeout(() => { window.location.href = destUrl.href; }, 1400);
+}
+
+handleRedirect();
+</script>
+
+</body>
+</html>

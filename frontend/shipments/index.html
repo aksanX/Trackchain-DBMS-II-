@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Shipment</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Shipment</h1>
+                <p>Advance each shipment through Packed → In Transit → Out For Delivery → Delivered.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="page-tabs">
+                <button type="button" class="active" data-tab="panel-pending">Pending</button>
+                <button type="button" data-tab="panel-transit">In Transit</button>
+                <button type="button" data-tab="panel-delivered">Delivered</button>
+            </div>
+
+            <div id="panel-pending" class="tab-panel active">
+                <div class="card full-width">
+                    <h2>Pending (Packed, not yet moving)</h2>
+                    <div class="table-responsive">
+                        <table class="shipment-table" data-bucket="pending">
+                            <thead><tr><th>Tracking code</th><th>Order</th><th>Customer</th><th>Status</th><th>Last updated</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="panel-transit" class="tab-panel">
+                <div class="card full-width">
+                    <h2>In Transit / Out For Delivery</h2>
+                    <div class="table-responsive">
+                        <table class="shipment-table" data-bucket="transit">
+                            <thead><tr><th>Tracking code</th><th>Order</th><th>Customer</th><th>Status</th><th>Last updated</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div id="panel-delivered" class="tab-panel">
+                <div class="card full-width">
+                    <h2>Delivered</h2>
+                    <div class="table-responsive">
+                        <table class="shipment-table" data-bucket="delivered">
+                            <thead><tr><th>Tracking code</th><th>Order</th><th>Customer</th><th>Status</th><th>Last updated</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card full-width" id="timeline-card" style="display:none;">
+                <h2 id="timeline-title">Shipment timeline</h2>
+                <div class="timeline" id="timeline-body"></div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("shipments");
+initPageTabs(".page-tabs");
+
+let statusHistory = {}; // shipment_id -> [{status, updated_time, location}] ascending
+
+function bucketFor(status) {
+    if (status === "Packed") return "pending";
+    if (status === "Delivered") return "delivered";
+    return "transit"; // In Transit, Out For Delivery
+}
+
+function renderBucket(bucket, rows) {
+    const tbody = document.querySelector(`.shipment-table[data-bucket="${bucket}"] tbody`);
+    tbody.innerHTML = "";
+    if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6">No shipments here</td></tr>`;
+        return;
+    }
+    rows.forEach(r => {
+        const next = nextShipmentStatus(r.status);
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td><span class="code-badge">${escapeHtml(r.tracking_code)}</span></td>
+            <td>#${r.order_id}</td>
+            <td>${escapeHtml(r.customerName)}</td>
+            <td>${statusBadge(r.status)}</td>
+            <td>${formatDateTime(r.updated_time)}</td>
+            <td class="table-actions">
+                <button type="button" class="btn-ghost btn-small view-timeline-btn" data-id="${r.shipment_id}">Timeline</button>
+                ${next ? `<button type="button" class="btn-ghost btn-small advance-btn" data-id="${r.shipment_id}" data-next="${next}">Mark ${next}</button>` : ""}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll(".advance-btn").forEach(btn =>
+        btn.addEventListener("click", () => advanceStatus(btn.dataset.id, btn.dataset.next)));
+    tbody.querySelectorAll(".view-timeline-btn").forEach(btn =>
+        btn.addEventListener("click", () => showTimeline(btn.dataset.id)));
+}
+
+async function loadShipments() {
+    const { data: shipments, error } = await supabaseClient
+        .from("shipment")
+        .select("shipment_id, order_id, tracking_code, shipment_date, order:order_id(customer:customer_id(name))")
+        .order("shipment_date", { ascending: false });
+    if (error) { console.error(error); return; }
+
+    const { data: statuses } = await supabaseClient
+        .from("shipment_status")
+        .select("shipment_id, status, location, updated_time")
+        .order("updated_time", { ascending: true });
+
+    statusHistory = {};
+    (statuses || []).forEach(s => {
+        if (!statusHistory[s.shipment_id]) statusHistory[s.shipment_id] = [];
+        statusHistory[s.shipment_id].push(s);
+    });
+
+    const rows = (shipments || []).map(s => {
+        const history = statusHistory[s.shipment_id] || [];
+        const latest = history[history.length - 1];
+        return {
+            shipment_id: s.shipment_id,
+            order_id: s.order_id,
+            tracking_code: s.tracking_code,
+            customerName: s.order?.customer?.name ?? "Unknown",
+            status: latest?.status ?? null,
+            updated_time: latest?.updated_time ?? s.shipment_date
+        };
+    });
+
+    const buckets = { pending: [], transit: [], delivered: [] };
+    rows.forEach(r => buckets[bucketFor(r.status)].push(r));
+
+    renderBucket("pending", buckets.pending);
+    renderBucket("transit", buckets.transit);
+    renderBucket("delivered", buckets.delivered);
+}
+
+async function advanceStatus(shipmentId, nextStatus) {
+    const { error } = await supabaseClient.from("shipment_status").insert({
+        shipment_id: parseInt(shipmentId),
+        status: nextStatus
+    });
+    if (error) { alert("Could not update status: " + error.message); return; }
+    loadShipments();
+}
+
+function showTimeline(shipmentId) {
+    const history = statusHistory[shipmentId] || [];
+    const card = document.getElementById("timeline-card");
+    const body = document.getElementById("timeline-body");
+    document.getElementById("timeline-title").textContent = `Shipment timeline`;
+
+    const latestStatus = history.length ? history[history.length - 1].status : null;
+    body.innerHTML = SHIPMENT_STATUS_ORDER.map(status => {
+        const step = history.find(h => h.status === status);
+        const isCurrent = status === latestStatus;
+        const isDone = step && !isCurrent;
+        const cls = isCurrent ? "current" : (isDone ? "done" : "");
+        return `
+            <div class="timeline-step ${cls}">
+                <div class="dot">${isDone || isCurrent ? "✓" : ""}</div>
+                <div>
+                    <div class="step-label">${status}</div>
+                    ${step ? `<div class="step-time">${formatDateTime(step.updated_time)}${step.location ? " — " + escapeHtml(step.location) : ""}</div>` : ""}
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    card.style.display = "block";
+    card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+loadShipments();
+</script>
+
+</body>
+</html>

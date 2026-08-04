@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Track your shipment — SupplySphere</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body class="public-page">
+
+<header>
+    <h1>SupplySphere Store</h1>
+</header>
+
+<main class="container" style="max-width: 560px;">
+    <div class="form-container card">
+        <h2>Track your shipment</h2>
+        <p class="card-subtitle">Enter the tracking code from your order confirmation, e.g. TRK1005.</p>
+        <form id="track-form">
+            <label for="tracking-code">Tracking code</label>
+            <input type="text" id="tracking-code" placeholder="TRK1005" required>
+            <button type="submit">Track</button>
+        </form>
+        <div id="track-status" class="status-msg"></div>
+        <div class="timeline" id="track-timeline" style="margin-top: 24px;"></div>
+    </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+async function trackShipment(code) {
+    const statusDiv = document.getElementById("track-status");
+    const timelineEl = document.getElementById("track-timeline");
+    timelineEl.innerHTML = "";
+    statusDiv.textContent = "Looking up shipment…";
+    statusDiv.className = "status-msg";
+
+    const { data: shipment, error } = await supabaseClient
+        .from("shipment")
+        .select("shipment_id, tracking_code, shipment_date")
+        .eq("tracking_code", code)
+        .maybeSingle();
+
+    if (error || !shipment) {
+        statusDiv.textContent = `No shipment found for "${code}". Double-check the code and try again.`;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    const { data: history } = await supabaseClient
+        .from("shipment_status")
+        .select("status, location, updated_time")
+        .eq("shipment_id", shipment.shipment_id)
+        .order("updated_time", { ascending: true });
+
+    statusDiv.textContent = `Shipment ${shipment.tracking_code}`;
+    statusDiv.className = "status-msg status-ok";
+
+    const latestStatus = history && history.length ? history[history.length - 1].status : null;
+    timelineEl.innerHTML = SHIPMENT_STATUS_ORDER.map(status => {
+        const step = (history || []).find(h => h.status === status);
+        const isCurrent = status === latestStatus;
+        const isDone = step && !isCurrent;
+        const cls = isCurrent ? "current" : (isDone ? "done" : "");
+        return `
+            <div class="timeline-step ${cls}">
+                <div class="dot">${isDone || isCurrent ? "✓" : ""}</div>
+                <div>
+                    <div class="step-label">${status}</div>
+                    ${step ? `<div class="step-time">${formatDateTime(step.updated_time)}${step.location ? " — " + escapeHtml(step.location) : ""}</div>` : ""}
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+document.getElementById("track-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const code = document.getElementById("tracking-code").value.trim();
+    if (code) trackShipment(code);
+});
+
+// Support /storefront/track.html?code=TRK1005 direct links too.
+const params = new URLSearchParams(window.location.search);
+const prefillCode = params.get("code");
+if (prefillCode) {
+    document.getElementById("tracking-code").value = prefillCode;
+    trackShipment(prefillCode);
+}
+</script>
+
+</body>
+</html>
