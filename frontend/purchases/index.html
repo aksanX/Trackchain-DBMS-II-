@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Purchase Management</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Purchase Management</h1>
+                <p>Inventory should never magically increase — every unit is traceable to a purchase from a supplier into a warehouse.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2>Purchase inventory</h2>
+                <form id="purchase-form">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="purchase-supplier">Supplier</label>
+                            <select id="purchase-supplier" required></select>
+                        </div>
+                        <div>
+                            <label for="purchase-warehouse">Warehouse</label>
+                            <select id="purchase-warehouse" required></select>
+                        </div>
+                    </div>
+                    <label for="purchase-product">Product</label>
+                    <select id="purchase-product" required></select>
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="purchase-quantity">Quantity</label>
+                            <input type="number" id="purchase-quantity" min="1" value="1" required>
+                        </div>
+                        <div>
+                            <label for="purchase-cost">Unit cost</label>
+                            <input type="number" id="purchase-cost" min="0" step="0.01" required>
+                        </div>
+                    </div>
+                    <button type="submit">Record purchase</button>
+                </form>
+                <div id="purchase-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Purchase history</h2>
+                <div class="table-responsive">
+                    <table id="purchase-table">
+                        <thead>
+                            <tr><th>Date</th><th>Supplier</th><th>Warehouse</th><th>Product</th><th>Qty</th><th>Unit cost</th><th>Total</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("purchases");
+
+async function loadDropdowns() {
+    const { data: suppliers } = await supabaseClient.from("supplier").select("supplier_id, name").order("name");
+    document.getElementById("purchase-supplier").innerHTML =
+        (suppliers || []).map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
+
+    const { data: warehouses } = await supabaseClient.from("warehouse").select("warehouse_id, name").order("name");
+    document.getElementById("purchase-warehouse").innerHTML =
+        (warehouses || []).map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
+
+    const { data: products } = await supabaseClient.from("product").select("product_id, name").order("name");
+    document.getElementById("purchase-product").innerHTML =
+        (products || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+}
+
+async function loadPurchaseHistory() {
+    const { data, error } = await supabaseClient.from("purchase_history").select("*").limit(50);
+    if (error) { console.error(error); return; }
+    fillTable("purchase-table", data, r => `
+        <td>${formatDate(r.purchase_date)}</td>
+        <td>${escapeHtml(r.supplier_name)}</td>
+        <td>${escapeHtml(r.warehouse_name)}</td>
+        <td>${escapeHtml(r.product_name)}</td>
+        <td>${r.quantity}</td>
+        <td>${formatMoney(r.unit_cost)}</td>
+        <td>${formatMoney(r.total_cost)}</td>
+    `, 7);
+}
+
+document.getElementById("purchase-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("purchase-status");
+    statusDiv.textContent = "Recording purchase…";
+    statusDiv.className = "status-msg";
+
+    const { data, error } = await supabaseClient.rpc("place_purchase_api", {
+        p_supplier_id: parseInt(document.getElementById("purchase-supplier").value),
+        p_warehouse_id: parseInt(document.getElementById("purchase-warehouse").value),
+        p_product_id: parseInt(document.getElementById("purchase-product").value),
+        p_quantity: parseInt(document.getElementById("purchase-quantity").value),
+        p_unit_cost: parseFloat(document.getElementById("purchase-cost").value)
+    });
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = `Purchase #${data} recorded — inventory updated.`;
+    statusDiv.className = "status-msg status-ok";
+    document.getElementById("purchase-form").reset();
+    loadPurchaseHistory();
+});
+
+loadDropdowns();
+loadPurchaseHistory();
+</script>
+
+</body>
+</html>
