@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Customer</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Customer</h1>
+                <p>Everyone who has ever bought from the storefront, plus any you add manually. Guest checkouts create these automatically by matching on phone number.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2 id="form-title">Add customer</h2>
+                <form id="customer-form">
+                    <input type="hidden" id="customer-id">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="customer-name">Name</label>
+                            <input type="text" id="customer-name" required>
+                        </div>
+                        <div>
+                            <label for="customer-contact">Contact (phone)</label>
+                            <input type="text" id="customer-contact">
+                        </div>
+                    </div>
+                    <button type="submit" id="customer-submit">Add customer</button>
+                    <button type="button" class="btn-ghost" id="customer-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
+                </form>
+                <div id="customer-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Customers</h2>
+                <div class="toolbar">
+                    <input type="text" id="customer-search" class="search-input" placeholder="Search customers…">
+                </div>
+                <div class="table-responsive">
+                    <table id="customer-table">
+                        <thead><tr><th>Name</th><th>Contact</th><th>Orders</th><th>Actions</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("customers");
+
+let allCustomers = [];
+
+function renderCustomerRows(rows) {
+    fillTable("customer-table", rows, r => `
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.contact) || "-"}</td>
+        <td>${r.orderCount}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.customer_id}">Edit</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.customer_id}">Delete</button>
+        </td>
+    `, 4);
+    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteCustomer(btn.dataset.id)));
+}
+
+async function loadCustomers() {
+    const { data, error } = await supabaseClient
+        .from("customer")
+        .select("customer_id, name, contact, order(order_id)")
+        .order("name");
+    if (error) { console.error(error); return; }
+    allCustomers = (data || []).map(c => ({ ...c, orderCount: (c.order || []).length }));
+    renderCustomerRows(allCustomers);
+}
+
+function startEdit(id) {
+    const c = allCustomers.find(r => String(r.customer_id) === String(id));
+    if (!c) return;
+    document.getElementById("customer-id").value = c.customer_id;
+    document.getElementById("customer-name").value = c.name;
+    document.getElementById("customer-contact").value = c.contact || "";
+    document.getElementById("form-title").textContent = "Edit customer";
+    document.getElementById("customer-submit").textContent = "Update customer";
+    document.getElementById("customer-cancel").style.display = "inline-block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+    document.getElementById("customer-form").reset();
+    document.getElementById("customer-id").value = "";
+    document.getElementById("form-title").textContent = "Add customer";
+    document.getElementById("customer-submit").textContent = "Add customer";
+    document.getElementById("customer-cancel").style.display = "none";
+}
+
+document.getElementById("customer-cancel").addEventListener("click", resetForm);
+
+document.getElementById("customer-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("customer-status");
+    const id = document.getElementById("customer-id").value;
+    const payload = {
+        name: document.getElementById("customer-name").value.trim(),
+        contact: document.getElementById("customer-contact").value.trim() || null
+    };
+
+    const { error } = id
+        ? await supabaseClient.from("customer").update(payload).eq("customer_id", id)
+        : await supabaseClient.from("customer").insert(payload);
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = id ? "Customer updated." : "Customer added.";
+    statusDiv.className = "status-msg status-ok";
+    resetForm();
+    loadCustomers();
+});
+
+async function deleteCustomer(id) {
+    if (!confirm("Delete this customer? This will fail if orders still reference them.")) return;
+    const { error } = await supabaseClient.from("customer").delete().eq("customer_id", id);
+    const statusDiv = document.getElementById("customer-status");
+    if (error) {
+        statusDiv.textContent = "Could not delete: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    statusDiv.textContent = "Customer deleted.";
+    statusDiv.className = "status-msg status-ok";
+    loadCustomers();
+}
+
+document.getElementById("customer-search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderCustomerRows(allCustomers); return; }
+    renderCustomerRows(allCustomers.filter(c =>
+        (c.name || "").toLowerCase().includes(q) ||
+        (c.contact || "").toLowerCase().includes(q)
+    ));
+});
+
+loadCustomers();
+</script>
+
+</body>
+</html>
