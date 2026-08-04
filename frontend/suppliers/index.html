@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Supplier Management</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Supplier Management</h1>
+                <p>Add, edit and search the suppliers your products come from.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2 id="form-title">Add supplier</h2>
+                <form id="supplier-form">
+                    <input type="hidden" id="supplier-id">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="supplier-name">Name</label>
+                            <input type="text" id="supplier-name" required>
+                        </div>
+                        <div>
+                            <label for="supplier-phone">Phone</label>
+                            <input type="text" id="supplier-phone">
+                        </div>
+                    </div>
+                    <label for="supplier-address">Address</label>
+                    <input type="text" id="supplier-address">
+                    <button type="submit" id="supplier-submit">Add supplier</button>
+                    <button type="button" class="btn-ghost" id="supplier-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
+                </form>
+                <div id="supplier-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Suppliers</h2>
+                <div class="toolbar">
+                    <input type="text" id="supplier-search" class="search-input" placeholder="Search suppliers…">
+                </div>
+                <div class="table-responsive">
+                    <table id="supplier-table">
+                        <thead>
+                            <tr><th>Name</th><th>Phone</th><th>Address</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("suppliers");
+
+let allSuppliers = [];
+
+function renderSupplierRows(rows) {
+    fillTable("supplier-table", rows, r => `
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.phone) || "-"}</td>
+        <td>${escapeHtml(r.address) || "-"}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.supplier_id}">Edit</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.supplier_id}">Delete</button>
+        </td>
+    `, 4);
+
+    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteSupplier(btn.dataset.id)));
+}
+
+async function loadSuppliers() {
+    const { data, error } = await supabaseClient.from("supplier").select("*").order("name");
+    if (error) { console.error(error); return; }
+    allSuppliers = data || [];
+    renderSupplierRows(allSuppliers);
+}
+
+function startEdit(id) {
+    const s = allSuppliers.find(r => String(r.supplier_id) === String(id));
+    if (!s) return;
+    document.getElementById("supplier-id").value = s.supplier_id;
+    document.getElementById("supplier-name").value = s.name;
+    document.getElementById("supplier-phone").value = s.phone || "";
+    document.getElementById("supplier-address").value = s.address || "";
+    document.getElementById("form-title").textContent = "Edit supplier";
+    document.getElementById("supplier-submit").textContent = "Update supplier";
+    document.getElementById("supplier-cancel").style.display = "inline-block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+    document.getElementById("supplier-form").reset();
+    document.getElementById("supplier-id").value = "";
+    document.getElementById("form-title").textContent = "Add supplier";
+    document.getElementById("supplier-submit").textContent = "Add supplier";
+    document.getElementById("supplier-cancel").style.display = "none";
+}
+
+document.getElementById("supplier-cancel").addEventListener("click", resetForm);
+
+document.getElementById("supplier-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("supplier-status");
+    const id = document.getElementById("supplier-id").value;
+    const payload = {
+        name: document.getElementById("supplier-name").value.trim(),
+        phone: document.getElementById("supplier-phone").value.trim() || null,
+        address: document.getElementById("supplier-address").value.trim() || null
+    };
+
+    const { error } = id
+        ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
+        : await supabaseClient.from("supplier").insert(payload);
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = id ? "Supplier updated." : "Supplier added.";
+    statusDiv.className = "status-msg status-ok";
+    resetForm();
+    loadSuppliers();
+});
+
+async function deleteSupplier(id) {
+    if (!confirm("Delete this supplier? This will fail if products still reference it.")) return;
+    const { error } = await supabaseClient.from("supplier").delete().eq("supplier_id", id);
+    const statusDiv = document.getElementById("supplier-status");
+    if (error) {
+        statusDiv.textContent = "Could not delete: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    statusDiv.textContent = "Supplier deleted.";
+    statusDiv.className = "status-msg status-ok";
+    loadSuppliers();
+}
+
+document.getElementById("supplier-search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderSupplierRows(allSuppliers); return; }
+    renderSupplierRows(allSuppliers.filter(s =>
+        (s.name || "").toLowerCase().includes(q) ||
+        (s.phone || "").toLowerCase().includes(q) ||
+        (s.address || "").toLowerCase().includes(q)
+    ));
+});
+
+loadSuppliers();
+</script>
+
+</body>
+</html>
