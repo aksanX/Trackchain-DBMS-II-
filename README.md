@@ -126,4 +126,6 @@ Inventory should never "magically" increase — every unit of stock is traceable
 
 ## Team
 
-_(fill in your names and which parts each of you owns)_
+Procheta Silvie (230042154)
+Tasnia Farzana  (230042124)
+Aksan Anan Ria  (230042154)
