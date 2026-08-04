@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Orders</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Orders</h1>
+                <p>Every order, where it came from, and where it's up to in fulfillment.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <div class="toolbar">
+                    <div class="page-tabs">
+                        <button type="button" class="active" data-filter="new">New (last 7 days)</button>
+                        <button type="button" data-filter="all">Order History</button>
+                    </div>
+                    <input type="text" id="order-search" class="search-input" placeholder="Search by customer or order #…">
+                </div>
+                <div class="table-responsive">
+                    <table id="order-table">
+                        <thead>
+                            <tr><th>Order</th><th>Customer</th><th>Items</th><th>Total</th><th>Source</th><th>Shipment</th><th>Date</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("orders");
+
+let allOrders = [];
+let currentFilter = "new";
+
+function renderOrderRows(rows) {
+    fillTable("order-table", rows, r => {
+        const itemsLabel = r.items.map(i => `${escapeHtml(i.name)} ×${i.quantity}`).join(", ") || "-";
+        const source = r.platform ? platformBadge(r.platform) : `<span class="badge badge-neutral">Direct</span>`;
+        return `
+            <td>#${r.order_id}</td>
+            <td>${escapeHtml(r.customerName)}</td>
+            <td>${itemsLabel}</td>
+            <td>${formatMoney(r.total)}</td>
+            <td>${source}</td>
+            <td>${statusBadge(r.shipmentStatus)}</td>
+            <td>${formatDate(r.order_date)}</td>
+        `;
+    }, 7);
+}
+
+function applyFilters() {
+    const q = document.getElementById("order-search").value.trim().toLowerCase();
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+
+    let rows = allOrders;
+    if (currentFilter === "new") {
+        rows = rows.filter(r => new Date(r.order_date).getTime() >= cutoff);
+    }
+    if (q) {
+        rows = rows.filter(r =>
+            r.customerName.toLowerCase().includes(q) ||
+            String(r.order_id).includes(q)
+        );
+    }
+    renderOrderRows(rows);
+}
+
+document.querySelectorAll(".page-tabs button[data-filter]").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll(".page-tabs button[data-filter]").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentFilter = btn.dataset.filter;
+        applyFilters();
+    });
+});
+
+document.getElementById("order-search").addEventListener("input", applyFilters);
+
+async function loadOrders() {
+    const { data: orders, error } = await supabaseClient
+        .from("order")
+        .select(`
+            order_id, order_date,
+            customer:customer_id(name),
+            order_item(quantity, unit_price, product:product_id(name)),
+            order_attribution(tracking_link:link_id(platform)),
+            shipment(shipment_id, tracking_code)
+        `)
+        .order("order_date", { ascending: false })
+        .limit(200);
+
+    if (error) { console.error(error); return; }
+
+    const { data: statuses } = await supabaseClient
+        .from("shipment_status")
+        .select("shipment_id, status, updated_time")
+        .order("updated_time", { ascending: false });
+    const latestStatus = {};
+    (statuses || []).forEach(r => { if (!(r.shipment_id in latestStatus)) latestStatus[r.shipment_id] = r.status; });
+
+    allOrders = (orders || []).map(o => {
+        const items = o.order_item || [];
+        const total = items.reduce((s, i) => s + i.quantity * Number(i.unit_price), 0);
+        const shipment = (o.shipment && o.shipment[0]) || null;
+        return {
+            order_id: o.order_id,
+            order_date: o.order_date,
+            customerName: o.customer?.name ?? "Unknown",
+            items: items.map(i => ({ name: i.product?.name ?? "Product", quantity: i.quantity })),
+            total,
+            platform: o.order_attribution?.[0]?.tracking_link?.platform ?? null,
+            shipmentStatus: shipment ? latestStatus[shipment.shipment_id] : null
+        };
+    });
+
+    applyFilters();
+}
+
+loadOrders();
+</script>
+
+</body>
+</html>
