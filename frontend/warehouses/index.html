@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Warehouse</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Warehouse</h1>
+                <p>Physical locations that hold inventory.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2 id="form-title">Add warehouse</h2>
+                <form id="warehouse-form">
+                    <input type="hidden" id="warehouse-id">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="warehouse-name">Name</label>
+                            <input type="text" id="warehouse-name" required>
+                        </div>
+                        <div>
+                            <label for="warehouse-location">Location</label>
+                            <input type="text" id="warehouse-location">
+                        </div>
+                    </div>
+                    <button type="submit" id="warehouse-submit">Add warehouse</button>
+                    <button type="button" class="btn-ghost" id="warehouse-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
+                </form>
+                <div id="warehouse-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Warehouse list</h2>
+                <div class="table-responsive">
+                    <table id="warehouse-table">
+                        <thead><tr><th>Name</th><th>Location</th><th>Actions</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("warehouses");
+
+let allWarehouses = [];
+
+async function loadWarehouses() {
+    const { data, error } = await supabaseClient.from("warehouse").select("*").order("name");
+    if (error) { console.error(error); return; }
+    allWarehouses = data || [];
+    fillTable("warehouse-table", allWarehouses, r => `
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.location) || "-"}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.warehouse_id}">Edit</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.warehouse_id}">Delete</button>
+        </td>
+    `, 3);
+    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteWarehouse(btn.dataset.id)));
+}
+
+function startEdit(id) {
+    const w = allWarehouses.find(r => String(r.warehouse_id) === String(id));
+    if (!w) return;
+    document.getElementById("warehouse-id").value = w.warehouse_id;
+    document.getElementById("warehouse-name").value = w.name;
+    document.getElementById("warehouse-location").value = w.location || "";
+    document.getElementById("form-title").textContent = "Edit warehouse";
+    document.getElementById("warehouse-submit").textContent = "Update warehouse";
+    document.getElementById("warehouse-cancel").style.display = "inline-block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+    document.getElementById("warehouse-form").reset();
+    document.getElementById("warehouse-id").value = "";
+    document.getElementById("form-title").textContent = "Add warehouse";
+    document.getElementById("warehouse-submit").textContent = "Add warehouse";
+    document.getElementById("warehouse-cancel").style.display = "none";
+}
+
+document.getElementById("warehouse-cancel").addEventListener("click", resetForm);
+
+document.getElementById("warehouse-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("warehouse-status");
+    const id = document.getElementById("warehouse-id").value;
+    const payload = {
+        name: document.getElementById("warehouse-name").value.trim(),
+        location: document.getElementById("warehouse-location").value.trim() || null
+    };
+
+    const { error } = id
+        ? await supabaseClient.from("warehouse").update(payload).eq("warehouse_id", id)
+        : await supabaseClient.from("warehouse").insert(payload);
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = id ? "Warehouse updated." : "Warehouse added.";
+    statusDiv.className = "status-msg status-ok";
+    resetForm();
+    loadWarehouses();
+});
+
+async function deleteWarehouse(id) {
+    if (!confirm("Delete this warehouse? This will fail if inventory/purchases still reference it.")) return;
+    const { error } = await supabaseClient.from("warehouse").delete().eq("warehouse_id", id);
+    const statusDiv = document.getElementById("warehouse-status");
+    if (error) {
+        statusDiv.textContent = "Could not delete: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    statusDiv.textContent = "Warehouse deleted.";
+    statusDiv.className = "status-msg status-ok";
+    loadWarehouses();
+}
+
+loadWarehouses();
+</script>
+
+</body>
+</html>
