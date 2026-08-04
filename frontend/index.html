@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Dashboard Overview</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Dashboard Overview</h1>
+                <p>Everything at a glance — revenue, orders, campaigns and fulfillment, across the whole business.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <section class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Revenue</div>
+                    <div class="stat-value accent" id="kpi-revenue">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Orders</div>
+                    <div class="stat-value" id="kpi-orders">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Campaigns</div>
+                    <div class="stat-value" id="kpi-campaigns">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Clicks</div>
+                    <div class="stat-value" id="kpi-clicks">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Pending shipments</div>
+                    <div class="stat-value" id="kpi-pending">—</div>
+                </div>
+            </section>
+
+            <div class="chart-row">
+                <div class="card">
+                    <h2>Revenue by platform</h2>
+                    <div class="chart-container"><canvas id="chart-revenue-platform"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>Orders by campaign</h2>
+                    <div class="chart-container"><canvas id="chart-orders-campaign"></canvas></div>
+                </div>
+            </div>
+
+            <div class="chart-row">
+                <div class="card">
+                    <h2>Clicks by country</h2>
+                    <div class="chart-container"><canvas id="chart-clicks-country"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>Monthly orders</h2>
+                    <div class="chart-container"><canvas id="chart-monthly-orders"></canvas></div>
+                </div>
+            </div>
+
+            <div class="chart-row">
+                <div class="card">
+                    <h2>Shipments by status</h2>
+                    <div class="chart-container"><canvas id="chart-shipment-status"></canvas></div>
+                </div>
+                <div class="card">
+                    <h2>Top products</h2>
+                    <div class="table-responsive">
+                        <table id="top-products-table">
+                            <thead><tr><th>Product</th><th>Units sold</th><th>Revenue</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-row">
+                <div class="card">
+                    <h2>Top campaigns</h2>
+                    <div class="table-responsive">
+                        <table id="top-campaigns-table">
+                            <thead><tr><th>Campaign</th><th>Orders</th><th>Revenue</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2>Top suppliers</h2>
+                    <div class="table-responsive">
+                        <table id="top-suppliers-table">
+                            <thead><tr><th>Supplier</th><th>Products</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-row">
+                <div class="card">
+                    <h2>Low stock</h2>
+                    <div class="table-responsive">
+                        <table id="low-stock-table">
+                            <thead><tr><th>Product</th><th>Quantity</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2>Recent orders</h2>
+                    <div class="table-responsive">
+                        <table id="recent-orders-table">
+                            <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Date</th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Recent shipments</h2>
+                <div class="table-responsive">
+                    <table id="recent-shipments-table">
+                        <thead><tr><th>Tracking code</th><th>Order</th><th>Status</th><th>Shipped</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("dashboard");
+
+function barChart(canvasId, labels, data, colors) {
+    return new Chart(document.getElementById(canvasId), {
+        type: "bar",
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderRadius: 6, maxBarThickness: 42 }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: "#52514e", maxRotation: 30 } },
+                y: { beginAtZero: true, grid: { color: "#e1e0d9" }, ticks: { color: "#898781" } }
+            }
+        }
+    });
+}
+
+async function loadKpis() {
+    const { count: orderCount } = await supabaseClient.from("order").select("*", { count: "exact", head: true });
+    const { count: campaignCount } = await supabaseClient.from("campaign").select("*", { count: "exact", head: true });
+    const { count: clickCount } = await supabaseClient.from("click").select("*", { count: "exact", head: true });
+    const { data: items } = await supabaseClient.from("order_item").select("quantity, unit_price");
+    const { data: pending } = await supabaseClient.rpc("pending_shipment_report");
+
+    const revenue = (items || []).reduce((sum, i) => sum + i.quantity * Number(i.unit_price), 0);
+
+    document.getElementById("kpi-revenue").textContent = formatMoney(revenue);
+    document.getElementById("kpi-orders").textContent = (orderCount ?? 0).toLocaleString();
+    document.getElementById("kpi-campaigns").textContent = (campaignCount ?? 0).toLocaleString();
+    document.getElementById("kpi-clicks").textContent = (clickCount ?? 0).toLocaleString();
+    document.getElementById("kpi-pending").textContent = (pending || []).length;
+}
+
+async function loadPlatformChart() {
+    const { data, error } = await supabaseClient.from("platform_performance").select("*");
+    if (error || !data) return;
+    const ordered = PLATFORMS.map(p => data.find(r => r.platform === p)).filter(Boolean);
+    barChart("chart-revenue-platform",
+        ordered.map(r => r.platform),
+        ordered.map(r => Number(r.total_revenue) || 0),
+        ordered.map(r => PLATFORM_COLOR[r.platform]));
+}
+
+async function loadCampaignChartAndTable() {
+    const { data, error } = await supabaseClient.from("campaign_performance").select("*");
+    if (error || !data) return;
+
+    const byCampaign = {};
+    data.forEach(r => {
+        if (!byCampaign[r.campaign_name]) byCampaign[r.campaign_name] = { orders: 0, revenue: 0 };
+        byCampaign[r.campaign_name].orders += r.total_orders || 0;
+        byCampaign[r.campaign_name].revenue += Number(r.total_revenue) || 0;
+    });
+
+    const rows = Object.entries(byCampaign)
+        .map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 6);
+
+    barChart("chart-orders-campaign", rows.map(r => r.name), rows.map(r => r.orders), "#6366f1");
+
+    fillTable("top-campaigns-table", rows.slice(0, 5), r =>
+        `<td>${escapeHtml(r.name)}</td><td>${r.orders}</td><td>${formatMoney(r.revenue)}</td>`, 3);
+}
+
+async function loadClicksByCountry() {
+    const { data, error } = await supabaseClient.from("click").select("country");
+    if (error || !data) return;
+    const counts = {};
+    data.forEach(c => {
+        const country = c.country || "Unknown";
+        counts[country] = (counts[country] || 0) + 1;
+    });
+    const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    barChart("chart-clicks-country", rows.map(r => r[0]), rows.map(r => r[1]), "#eb6834");
+}
+
+async function loadMonthlyOrders() {
+    const { data, error } = await supabaseClient.from("order").select("order_date");
+    if (error || !data) return;
+    const counts = {};
+    data.forEach(o => {
+        const d = new Date(o.order_date);
+        const key = d.toLocaleDateString(undefined, { year: "numeric", month: "short" });
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    const labels = Object.keys(counts);
+    barChart("chart-monthly-orders", labels, labels.map(l => counts[l]), "#1baf7a");
+}
+
+async function loadShipmentStatusChart() {
+    const { data, error } = await supabaseClient
+        .from("shipment_status")
+        .select("shipment_id, status, updated_time")
+        .order("updated_time", { ascending: false });
+    if (error) return;
+    const latest = {};
+    (data || []).forEach(r => { if (!(r.shipment_id in latest)) latest[r.shipment_id] = r.status; });
+    const counts = {};
+    SHIPMENT_STATUS_ORDER.forEach(s => counts[s] = 0);
+    Object.values(latest).forEach(s => { if (s in counts) counts[s]++; });
+    barChart("chart-shipment-status", SHIPMENT_STATUS_ORDER, SHIPMENT_STATUS_ORDER.map(s => counts[s]),
+        SHIPMENT_STATUS_ORDER.map(s => SHIPMENT_STATUS_COLOR[s]));
+}
+
+async function loadTopProducts() {
+    const { data, error } = await supabaseClient
+        .from("order_item")
+        .select("quantity, unit_price, product:product_id(name)");
+    if (error || !data) return;
+    const byProduct = {};
+    data.forEach(i => {
+        const name = i.product?.name ?? "Unknown";
+        if (!byProduct[name]) byProduct[name] = { units: 0, revenue: 0 };
+        byProduct[name].units += i.quantity;
+        byProduct[name].revenue += i.quantity * Number(i.unit_price);
+    });
+    const rows = Object.entries(byProduct)
+        .map(([name, v]) => ({ name, ...v }))
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5);
+    fillTable("top-products-table", rows, r =>
+        `<td>${escapeHtml(r.name)}</td><td>${r.units}</td><td>${formatMoney(r.revenue)}</td>`, 3);
+}
+
+async function loadTopSuppliers() {
+    const { data, error } = await supabaseClient.from("supplier_product_count").select("*").limit(5);
+    if (error || !data) return;
+    fillTable("top-suppliers-table", data, r =>
+        `<td>${escapeHtml(r.name)}</td><td>${r.product_count}</td>`, 2);
+}
+
+async function loadLowStock() {
+    const { data, error } = await supabaseClient.rpc("low_stock_products", { p_threshold: 10 });
+    if (error) return;
+    fillTable("low-stock-table", data, r =>
+        `<td>${escapeHtml(r.product_name)}</td><td><span class="badge badge-warning">${r.quantity} left</span></td>`, 2);
+}
+
+async function loadRecentOrders() {
+    const { data, error } = await supabaseClient
+        .from("order")
+        .select("order_id, order_date, customer:customer_id(name), order_item(quantity, unit_price)")
+        .order("order_date", { ascending: false })
+        .limit(5);
+    if (error || !data) return;
+    fillTable("recent-orders-table", data, r => {
+        const total = (r.order_item || []).reduce((s, i) => s + i.quantity * Number(i.unit_price), 0);
+        return `<td>#${r.order_id}</td><td>${escapeHtml(r.customer?.name ?? "-")}</td><td>${formatMoney(total)}</td><td>${formatDate(r.order_date)}</td>`;
+    }, 4);
+}
+
+async function loadRecentShipments() {
+    const { data: shipments, error } = await supabaseClient
+        .from("shipment")
+        .select("shipment_id, tracking_code, order_id, shipment_date")
+        .order("shipment_date", { ascending: false })
+        .limit(5);
+    if (error || !shipments) return;
+
+    const { data: statuses } = await supabaseClient
+        .from("shipment_status")
+        .select("shipment_id, status, updated_time")
+        .order("updated_time", { ascending: false });
+    const latest = {};
+    (statuses || []).forEach(r => { if (!(r.shipment_id in latest)) latest[r.shipment_id] = r.status; });
+
+    fillTable("recent-shipments-table", shipments, r =>
+        `<td><span class="code-badge">${escapeHtml(r.tracking_code)}</span></td><td>#${r.order_id}</td><td>${statusBadge(latest[r.shipment_id])}</td><td>${formatDate(r.shipment_date)}</td>`, 4);
+}
+
+loadKpis();
+loadPlatformChart();
+loadCampaignChartAndTable();
+loadClicksByCountry();
+loadMonthlyOrders();
+loadShipmentStatusChart();
+loadTopProducts();
+loadTopSuppliers();
+loadLowStock();
+loadRecentOrders();
+loadRecentShipments();
+</script>
+
+</body>
+</html>
