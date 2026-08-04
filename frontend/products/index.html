@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SupplySphere — Product Management</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Product Management</h1>
+                <p>Every product belongs to exactly one supplier.</p>
+            </div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2 id="form-title">Add product</h2>
+                <form id="product-form">
+                    <input type="hidden" id="product-id">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="product-supplier">Supplier</label>
+                            <select id="product-supplier" required></select>
+                        </div>
+                        <div>
+                            <label for="product-name">Name</label>
+                            <input type="text" id="product-name" required>
+                        </div>
+                    </div>
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="product-category">Category</label>
+                            <input type="text" id="product-category">
+                        </div>
+                        <div>
+                            <label for="product-price">Price</label>
+                            <input type="number" id="product-price" min="0" step="0.01" required>
+                        </div>
+                    </div>
+                    <button type="submit" id="product-submit">Add product</button>
+                    <button type="button" class="btn-ghost" id="product-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
+                </form>
+                <div id="product-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Products</h2>
+                <div class="toolbar">
+                    <input type="text" id="product-search" class="search-input" placeholder="Search products…">
+                </div>
+                <div class="table-responsive">
+                    <table id="product-table">
+                        <thead>
+                            <tr><th>Name</th><th>Supplier</th><th>Category</th><th>Price</th><th>Actions</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderSidebar("products");
+
+let allProducts = [];
+let allSuppliersForSelect = [];
+
+async function loadSupplierOptions() {
+    const { data, error } = await supabaseClient.from("supplier").select("supplier_id, name").order("name");
+    if (error) { console.error(error); return; }
+    allSuppliersForSelect = data || [];
+    const select = document.getElementById("product-supplier");
+    select.innerHTML = allSuppliersForSelect.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
+}
+
+function renderProductRows(rows) {
+    fillTable("product-table", rows, r => `
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.supplier?.name ?? "-")}</td>
+        <td>${escapeHtml(r.category) || "-"}</td>
+        <td>${formatMoney(r.price)}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.product_id}">Edit</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.product_id}">Delete</button>
+        </td>
+    `, 5);
+
+    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteProduct(btn.dataset.id)));
+}
+
+async function loadProducts() {
+    const { data, error } = await supabaseClient
+        .from("product")
+        .select("product_id, name, category, price, supplier:supplier_id(name)")
+        .order("name");
+    if (error) { console.error(error); return; }
+    allProducts = data || [];
+    renderProductRows(allProducts);
+}
+
+function startEdit(id) {
+    const p = allProducts.find(r => String(r.product_id) === String(id));
+    if (!p) return;
+    document.getElementById("product-id").value = p.product_id;
+    document.getElementById("product-name").value = p.name;
+    document.getElementById("product-category").value = p.category || "";
+    document.getElementById("product-price").value = p.price;
+    document.getElementById("form-title").textContent = "Edit product";
+    document.getElementById("product-submit").textContent = "Update product";
+    document.getElementById("product-cancel").style.display = "inline-block";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function resetForm() {
+    document.getElementById("product-form").reset();
+    document.getElementById("product-id").value = "";
+    document.getElementById("form-title").textContent = "Add product";
+    document.getElementById("product-submit").textContent = "Add product";
+    document.getElementById("product-cancel").style.display = "none";
+}
+
+document.getElementById("product-cancel").addEventListener("click", resetForm);
+
+document.getElementById("product-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("product-status");
+    const id = document.getElementById("product-id").value;
+    const payload = {
+        supplier_id: parseInt(document.getElementById("product-supplier").value),
+        name: document.getElementById("product-name").value.trim(),
+        category: document.getElementById("product-category").value.trim() || null,
+        price: parseFloat(document.getElementById("product-price").value)
+    };
+
+    const { error } = id
+        ? await supabaseClient.from("product").update(payload).eq("product_id", id)
+        : await supabaseClient.from("product").insert(payload);
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    statusDiv.textContent = id ? "Product updated." : "Product added.";
+    statusDiv.className = "status-msg status-ok";
+    resetForm();
+    loadProducts();
+});
+
+async function deleteProduct(id) {
+    if (!confirm("Delete this product? This will fail if orders/inventory still reference it.")) return;
+    const { error } = await supabaseClient.from("product").delete().eq("product_id", id);
+    const statusDiv = document.getElementById("product-status");
+    if (error) {
+        statusDiv.textContent = "Could not delete: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    statusDiv.textContent = "Product deleted.";
+    statusDiv.className = "status-msg status-ok";
+    loadProducts();
+}
+
+document.getElementById("product-search").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) { renderProductRows(allProducts); return; }
+    renderProductRows(allProducts.filter(p =>
+        (p.name || "").toLowerCase().includes(q) ||
+        (p.category || "").toLowerCase().includes(q) ||
+        (p.supplier?.name || "").toLowerCase().includes(q)
+    ));
+});
+
+loadSupplierOptions();
+loadProducts();
+</script>
+
+</body>
+</html>
