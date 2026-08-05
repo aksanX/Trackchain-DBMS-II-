@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SupplySphere — Campaign Management</title>
+<title>TrackChain — Campaign Management</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -224,7 +224,7 @@ async function showCampaignDetails(campaignId, campaignName) {
         const demoPath = `/storefront/redirect.html?code=${l.short_code}`;
         return `
             <td>${platformBadge(l.platform)}</td>
-            <td><span class="link-url">track.supplysphere.com/${escapeHtml(l.short_code)}</span></td>
+            <td><span class="link-url">track.trackchain.com/${escapeHtml(l.short_code)}</span></td>
             <td>${clickCounts[l.link_id] || 0}</td>
             <td>
                 <a href="${demoPath}" target="_blank" rel="noopener"><button type="button" class="btn-ghost btn-small">Test link &rarr;</button></a>
@@ -306,7 +306,7 @@ document.getElementById("campaign-form").addEventListener("submit", async (e) =>
         <div class="link-row">
             <div>
                 ${platformBadge(l.platform)}
-                <span class="link-url">track.supplysphere.com/${l.short_code}</span>
+                <span class="link-url">track.trackchain.com/${l.short_code}</span>
             </div>
             <div class="link-actions">
                 <button type="button" class="btn-ghost copy-link" data-url="${demoAbsolute}">Copy</button>

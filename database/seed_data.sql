@@ -1,5 +1,5 @@
 -- =========================================================
--- SupplySphere Seed Data
+-- TrackChain Seed Data
 -- Run this AFTER schema.sql, in the same SQL Editor.
 -- Gives every dashboard/view real, non-empty numbers to show.
 -- =========================================================
@@ -58,13 +58,13 @@ INSERT INTO campaign (product_id, campaign_name, start_date, end_date) VALUES
 
 -- ---------- Tracking links (platform prefix + campaign id) ----------
 INSERT INTO tracking_link (campaign_id, platform, short_code, destination_url) VALUES
-(1, 'Facebook', 'FB1', 'https://supplysphere.example/product/1'),
-(1, 'Instagram','IG1', 'https://supplysphere.example/product/1'),
-(1, 'Email',    'EM1', 'https://supplysphere.example/product/1'),
-(2, 'Facebook', 'FB2', 'https://supplysphere.example/product/3'),
-(2, 'WhatsApp', 'WA2', 'https://supplysphere.example/product/3'),
-(3, 'Instagram','IG3', 'https://supplysphere.example/product/5'),
-(3, 'Email',    'EM3', 'https://supplysphere.example/product/5');
+(1, 'Facebook', 'FB1', 'https://trackchain.example/product/1'),
+(1, 'Instagram','IG1', 'https://trackchain.example/product/1'),
+(1, 'Email',    'EM1', 'https://trackchain.example/product/1'),
+(2, 'Facebook', 'FB2', 'https://trackchain.example/product/3'),
+(2, 'WhatsApp', 'WA2', 'https://trackchain.example/product/3'),
+(3, 'Instagram','IG3', 'https://trackchain.example/product/5'),
+(3, 'Email',    'EM3', 'https://trackchain.example/product/5');
 
 -- ---------- Clicks (anonymous for social platforms, known for Email) ----------
 INSERT INTO click (link_id, click_time, country, device, customer_id) VALUES
@@ -126,11 +126,4 @@ SELECT shipment_id, 'Customer Area', 'Delivered', NOW() - INTERVAL '1 day' FROM 
 UNION ALL
 SELECT shipment_id, 'Dhaka Hub', 'In Transit', NOW() - INTERVAL '2 day' FROM shipment WHERE order_id = 2;
 
--- ---------- Quick sanity checks (run these yourself in the SQL editor) ----------
--- SELECT * FROM campaign_performance;
--- SELECT * FROM platform_performance;
--- SELECT * FROM supplier_product_count;
--- SELECT * FROM low_stock_products(10);
--- SELECT * FROM pending_shipment_report();
--- SELECT * FROM audit_log ORDER BY log_time DESC;
--- SELECT * FROM purchase_history;
+

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SupplySphere — Supplier Management</title>
+<title>TrackChain — Supplier Management</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -70,6 +70,8 @@
 renderSidebar("suppliers");
 
 let allSuppliers = [];
+let currentQuery = "";     // FIX: remembered so a reload doesn't silently drop the active search
+let editingId = null;      // FIX: tracked so the row being edited can be highlighted in the table
 
 function renderSupplierRows(rows) {
     fillTable("supplier-table", rows, r => `
@@ -82,20 +84,40 @@ function renderSupplierRows(rows) {
         </td>
     `, 4);
 
-    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".edit-btn").forEach(btn => {
+        btn.addEventListener("click", () => startEdit(btn.dataset.id));
+        // FIX: highlight whichever row is currently being edited, so it's
+        // obvious which record the form up top refers to.
+        if (editingId !== null && String(btn.dataset.id) === String(editingId)) {
+            btn.closest("tr").style.background = "var(--accent-tint)";
+        }
+    });
     document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteSupplier(btn.dataset.id)));
+}
+
+// FIX: single source of truth for "what should the table show right now" --
+// re-used after every load AND every keystroke, so the search filter never
+// gets silently reset by an add/edit/delete.
+function applyFilter() {
+    if (!currentQuery) { renderSupplierRows(allSuppliers); return; }
+    renderSupplierRows(allSuppliers.filter(s =>
+        (s.name || "").toLowerCase().includes(currentQuery) ||
+        (s.phone || "").toLowerCase().includes(currentQuery) ||
+        (s.address || "").toLowerCase().includes(currentQuery)
+    ));
 }
 
 async function loadSuppliers() {
     const { data, error } = await supabaseClient.from("supplier").select("*").order("name");
     if (error) { console.error(error); return; }
     allSuppliers = data || [];
-    renderSupplierRows(allSuppliers);
+    applyFilter(); // FIX: was renderSupplierRows(allSuppliers) -- ignored any active search
 }
 
 function startEdit(id) {
     const s = allSuppliers.find(r => String(r.supplier_id) === String(id));
     if (!s) return;
+    editingId = id;
     document.getElementById("supplier-id").value = s.supplier_id;
     document.getElementById("supplier-name").value = s.name;
     document.getElementById("supplier-phone").value = s.phone || "";
@@ -103,6 +125,7 @@ function startEdit(id) {
     document.getElementById("form-title").textContent = "Edit supplier";
     document.getElementById("supplier-submit").textContent = "Update supplier";
     document.getElementById("supplier-cancel").style.display = "inline-block";
+    applyFilter(); // re-render so the row picks up the highlight
     window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -112,6 +135,8 @@ function resetForm() {
     document.getElementById("form-title").textContent = "Add supplier";
     document.getElementById("supplier-submit").textContent = "Add supplier";
     document.getElementById("supplier-cancel").style.display = "none";
+    editingId = null;
+    applyFilter(); // FIX: clears the highlight immediately, without needing a full reload
 }
 
 document.getElementById("supplier-cancel").addEventListener("click", resetForm);
@@ -126,6 +151,15 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
         address: document.getElementById("supplier-address").value.trim() || null
     };
 
+    // FIX: the "required" attribute only blocks a literally-empty field --
+    // a name of all spaces still passes it, then .trim() above turns it
+    // into "", which the DB happily accepts (NOT NULL, not "non-empty").
+    if (!payload.name) {
+        statusDiv.textContent = "Name can't be blank.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
     const { error } = id
         ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
         : await supabaseClient.from("supplier").insert(payload);
@@ -136,14 +170,14 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
         return;
     }
 
-    statusDiv.textContent = id ? "Supplier updated." : "Supplier added.";
+    statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
     statusDiv.className = "status-msg status-ok";
     resetForm();
     loadSuppliers();
 });
 
 async function deleteSupplier(id) {
-    if (!confirm("Delete this supplier? This will fail if products still reference it.")) return;
+    if (!confirm("Delete this supplier? This will fail if products or purchases still reference it.")) return;
     const { error } = await supabaseClient.from("supplier").delete().eq("supplier_id", id);
     const statusDiv = document.getElementById("supplier-status");
     if (error) {
@@ -157,13 +191,8 @@ async function deleteSupplier(id) {
 }
 
 document.getElementById("supplier-search").addEventListener("input", (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    if (!q) { renderSupplierRows(allSuppliers); return; }
-    renderSupplierRows(allSuppliers.filter(s =>
-        (s.name || "").toLowerCase().includes(q) ||
-        (s.phone || "").toLowerCase().includes(q) ||
-        (s.address || "").toLowerCase().includes(q)
-    ));
+    currentQuery = e.target.value.trim().toLowerCase();
+    applyFilter();
 });
 
 loadSuppliers();

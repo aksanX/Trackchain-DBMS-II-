@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SupplySphere — Product Management</title>
+<title>TrackChain — Product Management</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -22,6 +22,8 @@
 
             <div class="card full-width">
                 <h2 id="form-title">Add product</h2>
+                <!-- FIX: shown instead of a raw insert error when there are no suppliers yet -->
+                <div id="product-prereq-warning"></div>
                 <form id="product-form">
                     <input type="hidden" id="product-id">
                     <div class="form-row two-col">
@@ -79,6 +81,8 @@ renderSidebar("products");
 
 let allProducts = [];
 let allSuppliersForSelect = [];
+let currentQuery = "";     // FIX: remembered so a reload doesn't silently drop the active search
+let editingId = null;      // FIX: tracked so the row being edited can be highlighted in the table
 
 async function loadSupplierOptions() {
     const { data, error } = await supabaseClient.from("supplier").select("supplier_id, name").order("name");
@@ -86,6 +90,19 @@ async function loadSupplierOptions() {
     allSuppliersForSelect = data || [];
     const select = document.getElementById("product-supplier");
     select.innerHTML = allSuppliersForSelect.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
+
+    // FIX: without a supplier to pick, submitting used to send parseInt(undefined)
+    // -> NaN straight to Supabase and surface a confusing raw error. Now we
+    // block the form and point the user at the page that unblocks it.
+    const submitBtn = document.getElementById("product-submit");
+    const warningDiv = document.getElementById("product-prereq-warning");
+    if (allSuppliersForSelect.length === 0) {
+        submitBtn.disabled = true;
+        warningDiv.innerHTML = missingPrereqHtml([{ label: "supplier", href: "/suppliers/index.html" }]);
+    } else {
+        submitBtn.disabled = false;
+        warningDiv.innerHTML = "";
+    }
 }
 
 function renderProductRows(rows) {
@@ -100,8 +117,25 @@ function renderProductRows(rows) {
         </td>
     `, 5);
 
-    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+    document.querySelectorAll(".edit-btn").forEach(btn => {
+        btn.addEventListener("click", () => startEdit(btn.dataset.id));
+        if (editingId !== null && String(btn.dataset.id) === String(editingId)) {
+            btn.closest("tr").style.background = "var(--accent-tint)";
+        }
+    });
     document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteProduct(btn.dataset.id)));
+}
+
+// FIX: single source of truth for "what should the table show right now" --
+// re-used after every load AND every keystroke, so the search filter never
+// gets silently reset by an add/edit/delete.
+function applyFilter() {
+    if (!currentQuery) { renderProductRows(allProducts); return; }
+    renderProductRows(allProducts.filter(p =>
+        (p.name || "").toLowerCase().includes(currentQuery) ||
+        (p.category || "").toLowerCase().includes(currentQuery) ||
+        (p.supplier?.name || "").toLowerCase().includes(currentQuery)
+    ));
 }
 
 async function loadProducts() {
@@ -111,12 +145,13 @@ async function loadProducts() {
         .order("name");
     if (error) { console.error(error); return; }
     allProducts = data || [];
-    renderProductRows(allProducts);
+    applyFilter(); // FIX: was renderProductRows(allProducts) -- ignored any active search
 }
 
 function startEdit(id) {
     const p = allProducts.find(r => String(r.product_id) === String(id));
     if (!p) return;
+    editingId = id;
     document.getElementById("product-id").value = p.product_id;
     document.getElementById("product-name").value = p.name;
     document.getElementById("product-category").value = p.category || "";
@@ -124,6 +159,7 @@ function startEdit(id) {
     document.getElementById("form-title").textContent = "Edit product";
     document.getElementById("product-submit").textContent = "Update product";
     document.getElementById("product-cancel").style.display = "inline-block";
+    applyFilter();
     window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -133,6 +169,8 @@ function resetForm() {
     document.getElementById("form-title").textContent = "Add product";
     document.getElementById("product-submit").textContent = "Add product";
     document.getElementById("product-cancel").style.display = "none";
+    editingId = null;
+    applyFilter();
 }
 
 document.getElementById("product-cancel").addEventListener("click", resetForm);
@@ -148,6 +186,15 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
         price: parseFloat(document.getElementById("product-price").value)
     };
 
+    // FIX: the "required" attribute only blocks a literally-empty field --
+    // a name of all spaces still passes it, then .trim() above turns it
+    // into "", which the DB happily accepts (NOT NULL, not "non-empty").
+    if (!payload.name) {
+        statusDiv.textContent = "Name can't be blank.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
     const { error } = id
         ? await supabaseClient.from("product").update(payload).eq("product_id", id)
         : await supabaseClient.from("product").insert(payload);
@@ -158,14 +205,14 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
         return;
     }
 
-    statusDiv.textContent = id ? "Product updated." : "Product added.";
+    statusDiv.textContent = id ? "Product updated." : "Product added — you can now buy/sell it or record purchases for it.";
     statusDiv.className = "status-msg status-ok";
     resetForm();
     loadProducts();
 });
 
 async function deleteProduct(id) {
-    if (!confirm("Delete this product? This will fail if orders/inventory still reference it.")) return;
+    if (!confirm("Delete this product? This will fail if orders, inventory, purchases or campaigns still reference it.")) return;
     const { error } = await supabaseClient.from("product").delete().eq("product_id", id);
     const statusDiv = document.getElementById("product-status");
     if (error) {
@@ -179,13 +226,8 @@ async function deleteProduct(id) {
 }
 
 document.getElementById("product-search").addEventListener("input", (e) => {
-    const q = e.target.value.trim().toLowerCase();
-    if (!q) { renderProductRows(allProducts); return; }
-    renderProductRows(allProducts.filter(p =>
-        (p.name || "").toLowerCase().includes(q) ||
-        (p.category || "").toLowerCase().includes(q) ||
-        (p.supplier?.name || "").toLowerCase().includes(q)
-    ));
+    currentQuery = e.target.value.trim().toLowerCase();
+    applyFilter();
 });
 
 loadSupplierOptions();

@@ -1,5 +1,5 @@
 -- =========================================================
--- SupplySphere Database Schema
+-- TrackChain Database Schema
 -- Integrated Supply Chain & Campaign Analytics System
 -- =========================================================
 -- HOW TO USE:
@@ -164,8 +164,8 @@ CREATE TABLE shipment_status (
     shipment_id  INT NOT NULL REFERENCES shipment(shipment_id) ON DELETE CASCADE,
     location     VARCHAR(150),
     status       VARCHAR(30) NOT NULL CHECK (
-                     status IN ('Packed','In Transit','Out For Delivery','Delivered')
-                 ),
+                    status IN ('Packed','In Transit','Out For Delivery','Delivered')
+                ),
     updated_time TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -173,9 +173,7 @@ CREATE TABLE shipment_status (
 -- =========================================================
 -- SECTION 4.5: PURCHASE MANAGEMENT
 -- =========================================================
--- Inventory should never "magically" increase -- every stock increment
--- must be traceable to a purchase from a supplier into a warehouse.
--- This mirrors order/order_item exactly, just for the inbound side.
+
 
 CREATE TABLE purchase (
     purchase_id   SERIAL PRIMARY KEY,
@@ -269,15 +267,7 @@ CREATE TRIGGER trg_audit_purchase
 AFTER INSERT OR UPDATE OR DELETE ON purchase
 FOR EACH ROW EXECUTE FUNCTION log_audit_purchase();
 
--- (Your team can add trg_audit_shipment, trg_audit_customer the same way
---  if you want more tables audited -- copy-paste-adapt the pattern above.
---  Auditing every one of the 13 tables is not necessary; 3-4 well-chosen
---  ones is enough to demonstrate the concept.)
 
-
--- 6.2 Business-logic trigger: reduce inventory automatically
--- whenever an order_item is inserted. This is the trigger you'll
--- most want to explain in the viva -- it enforces a real business rule.
 CREATE OR REPLACE FUNCTION reduce_inventory()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -308,10 +298,6 @@ AFTER INSERT ON order_item
 FOR EACH ROW EXECUTE FUNCTION reduce_inventory();
 
 
--- 6.2b Mirror image of reduce_inventory(): increase inventory whenever a
--- purchase_item is inserted. Unlike the sales side, this one *upserts* --
--- a purchase can be the first time a product is ever stocked at a given
--- warehouse, so there may not be an inventory row yet to update.
 CREATE OR REPLACE FUNCTION increase_inventory()
 RETURNS TRIGGER AS $$
 DECLARE
@@ -333,6 +319,59 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_increase_inventory
 AFTER INSERT ON purchase_item
 FOR EACH ROW EXECUTE FUNCTION increase_inventory();
+
+
+-- 6.2a Reject a purchase_item whose product isn't actually supplied by the
+-- purchase's supplier. Without this, "supplier_id" on purchase is pure
+
+CREATE OR REPLACE FUNCTION check_purchase_supplier_match()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_purchase_supplier_id INT;
+    v_product_supplier_id  INT;
+BEGIN
+    SELECT supplier_id INTO v_purchase_supplier_id FROM purchase WHERE purchase_id = NEW.purchase_id;
+    SELECT supplier_id INTO v_product_supplier_id  FROM product  WHERE product_id  = NEW.product_id;
+
+    IF v_product_supplier_id IS DISTINCT FROM v_purchase_supplier_id THEN
+        RAISE EXCEPTION 'Product % belongs to supplier %, not the purchase''s supplier % -- record this purchase under the product''s own supplier',
+            NEW.product_id, v_product_supplier_id, v_purchase_supplier_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_check_purchase_supplier_match
+BEFORE INSERT ON purchase_item
+FOR EACH ROW EXECUTE FUNCTION check_purchase_supplier_match();
+
+
+-- 6.2b Mirror image of trg_increase_inventory: reverse the inventory
+-- increase if a purchase is ever deleted. Attached to `purchase` itself
+-- and fired BEFORE DELETE, so it runs -- and can still see the
+-- purchase_item rows -- before the ON DELETE CASCADE removes them.
+-- Deleting a purchase whose stock has already been sold will fail
+-- (inventory's quantity >= 0 CHECK stops it going negative), same
+-- protective behavior as reduce_inventory() on the sales side.
+CREATE OR REPLACE FUNCTION reverse_inventory_on_purchase_delete()
+RETURNS TRIGGER AS $$
+DECLARE
+    item RECORD;
+BEGIN
+    FOR item IN SELECT product_id, quantity FROM purchase_item WHERE purchase_id = OLD.purchase_id LOOP
+        UPDATE inventory
+        SET quantity = quantity - item.quantity
+        WHERE warehouse_id = OLD.warehouse_id AND product_id = item.product_id;
+    END LOOP;
+
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_reverse_inventory_on_purchase_delete
+BEFORE DELETE ON purchase
+FOR EACH ROW EXECUTE FUNCTION reverse_inventory_on_purchase_delete();
 
 
 -- 6.3 Auto-generate shipment tracking code (TRK + shipment_id)

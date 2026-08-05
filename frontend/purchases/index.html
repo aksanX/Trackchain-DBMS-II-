@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SupplySphere — Purchase Management</title>
+<title>TrackChain — Purchase Management</title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -22,6 +22,10 @@
 
             <div class="card full-width">
                 <h2>Purchase inventory</h2>
+                <!-- FIX: explains why there's no Edit/Delete here, unlike Suppliers/Products/Warehouse -->
+                <p class="card-subtitle">Purchases are a permanent record — there's no edit or delete, so double-check before you submit.</p>
+                <!-- FIX: shown instead of a raw insert error when a supplier/warehouse/product doesn't exist yet -->
+                <div id="purchase-prereq-warning"></div>
                 <form id="purchase-form">
                     <div class="form-row two-col">
                         <div>
@@ -34,7 +38,10 @@
                         </div>
                     </div>
                     <label for="purchase-product">Product</label>
+                    <!-- FIX: this list is now filtered to only the selected supplier's products,
+                         instead of letting you pair any product with any supplier -->
                     <select id="purchase-product" required></select>
+                    <div id="purchase-no-product-note" class="status-msg status-error" style="display:none;"></div>
                     <div class="form-row two-col">
                         <div>
                             <label for="purchase-quantity">Quantity</label>
@@ -52,6 +59,11 @@
 
             <div class="card full-width">
                 <h2>Purchase history</h2>
+                <!-- FIX: Suppliers/Products already had search; History is the fastest-growing
+                     table of the group and previously had no way to filter it at all -->
+                <div class="toolbar">
+                    <input type="text" id="purchase-search" class="search-input" placeholder="Search by supplier, warehouse or product…">
+                </div>
                 <div class="table-responsive">
                     <table id="purchase-table">
                         <thead>
@@ -74,24 +86,74 @@
 <script>
 renderSidebar("purchases");
 
+// FIX: all three dropdown sources kept together so guardrails and the
+// supplier->product cascade can be computed from one consistent snapshot.
+let dropdownState = { suppliers: [], warehouses: [], products: [] };
+
 async function loadDropdowns() {
-    const { data: suppliers } = await supabaseClient.from("supplier").select("supplier_id, name").order("name");
+    const [{ data: suppliers }, { data: warehouses }, { data: products }] = await Promise.all([
+        supabaseClient.from("supplier").select("supplier_id, name").order("name"),
+        supabaseClient.from("warehouse").select("warehouse_id, name").order("name"),
+        supabaseClient.from("product").select("product_id, name, supplier_id").order("name")
+    ]);
+
+    dropdownState = { suppliers: suppliers || [], warehouses: warehouses || [], products: products || [] };
+
     document.getElementById("purchase-supplier").innerHTML =
-        (suppliers || []).map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
-
-    const { data: warehouses } = await supabaseClient.from("warehouse").select("warehouse_id, name").order("name");
+        dropdownState.suppliers.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
     document.getElementById("purchase-warehouse").innerHTML =
-        (warehouses || []).map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
+        dropdownState.warehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
 
-    const { data: products } = await supabaseClient.from("product").select("product_id, name").order("name");
-    document.getElementById("purchase-product").innerHTML =
-        (products || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+    updateFormState();
 }
 
-async function loadPurchaseHistory() {
-    const { data, error } = await supabaseClient.from("purchase_history").select("*").limit(50);
-    if (error) { console.error(error); return; }
-    fillTable("purchase-table", data, r => `
+// FIX: single function that (a) blocks the whole form with a helpful
+// message if any prerequisite table is empty, and (b) filters the Product
+// dropdown down to just the selected Supplier's products, so it's no
+// longer possible to record e.g. "bought a Denim Jacket from TechSource
+// Ltd" when Denim Jacket actually belongs to Global Textiles.
+function updateFormState() {
+    const submitBtn = document.querySelector("#purchase-form button[type=submit]");
+    const warningDiv = document.getElementById("purchase-prereq-warning");
+    const productSelect = document.getElementById("purchase-product");
+    const noProductNote = document.getElementById("purchase-no-product-note");
+
+    const missing = [];
+    if (dropdownState.suppliers.length === 0) missing.push({ label: "supplier", href: "/suppliers/index.html" });
+    if (dropdownState.warehouses.length === 0) missing.push({ label: "warehouse", href: "/warehouses/index.html" });
+    if (dropdownState.products.length === 0) missing.push({ label: "product", href: "/products/index.html" });
+
+    if (missing.length > 0) {
+        warningDiv.innerHTML = missingPrereqHtml(missing);
+        productSelect.innerHTML = "";
+        noProductNote.style.display = "none";
+        submitBtn.disabled = true;
+        return;
+    }
+    warningDiv.innerHTML = "";
+
+    const supplierId = document.getElementById("purchase-supplier").value;
+    const filtered = dropdownState.products.filter(p => String(p.supplier_id) === String(supplierId));
+
+    if (filtered.length === 0) {
+        productSelect.innerHTML = `<option value="">— none —</option>`;
+        noProductNote.textContent = "This supplier has no products yet. Add one on the Products page, or choose a different supplier.";
+        noProductNote.style.display = "block";
+        submitBtn.disabled = true;
+    } else {
+        productSelect.innerHTML = filtered.map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+        noProductNote.style.display = "none";
+        submitBtn.disabled = false;
+    }
+}
+
+document.getElementById("purchase-supplier").addEventListener("change", updateFormState);
+
+let allPurchaseHistory = [];
+let purchaseQuery = "";
+
+function renderPurchaseRows(rows) {
+    fillTable("purchase-table", rows, r => `
         <td>${formatDate(r.purchase_date)}</td>
         <td>${escapeHtml(r.supplier_name)}</td>
         <td>${escapeHtml(r.warehouse_name)}</td>
@@ -102,16 +164,42 @@ async function loadPurchaseHistory() {
     `, 7);
 }
 
+// FIX: same pattern as Suppliers/Products -- keeps the filter applied
+// across reloads instead of the search box going stale.
+function applyPurchaseFilter() {
+    if (!purchaseQuery) { renderPurchaseRows(allPurchaseHistory); return; }
+    renderPurchaseRows(allPurchaseHistory.filter(r =>
+        (r.supplier_name || "").toLowerCase().includes(purchaseQuery) ||
+        (r.warehouse_name || "").toLowerCase().includes(purchaseQuery) ||
+        (r.product_name || "").toLowerCase().includes(purchaseQuery)
+    ));
+}
+
+async function loadPurchaseHistory() {
+    const { data, error } = await supabaseClient.from("purchase_history").select("*").limit(50);
+    if (error) { console.error(error); return; }
+    allPurchaseHistory = data || [];
+    applyPurchaseFilter();
+}
+
+document.getElementById("purchase-search").addEventListener("input", (e) => {
+    purchaseQuery = e.target.value.trim().toLowerCase();
+    applyPurchaseFilter();
+});
+
 document.getElementById("purchase-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const statusDiv = document.getElementById("purchase-status");
     statusDiv.textContent = "Recording purchase…";
     statusDiv.className = "status-msg";
 
+    const warehouseId = parseInt(document.getElementById("purchase-warehouse").value);
+    const productId = parseInt(document.getElementById("purchase-product").value);
+
     const { data, error } = await supabaseClient.rpc("place_purchase_api", {
         p_supplier_id: parseInt(document.getElementById("purchase-supplier").value),
-        p_warehouse_id: parseInt(document.getElementById("purchase-warehouse").value),
-        p_product_id: parseInt(document.getElementById("purchase-product").value),
+        p_warehouse_id: warehouseId,
+        p_product_id: productId,
         p_quantity: parseInt(document.getElementById("purchase-quantity").value),
         p_unit_cost: parseFloat(document.getElementById("purchase-cost").value)
     });
@@ -122,9 +210,25 @@ document.getElementById("purchase-form").addEventListener("submit", async (e) =>
         return;
     }
 
-    statusDiv.textContent = `Purchase #${data} recorded — inventory updated.`;
+    // FIX: previously the confirmation was a dead end ("inventory updated" --
+    // but updated to what?). Now it looks up the actual resulting stock level
+    // and links straight to Inventory, so the effect of the action is visible
+    // immediately instead of requiring a manual trip to another page.
+    const { data: stockRow } = await supabaseClient
+        .from("inventory")
+        .select("quantity, product:product_id(name), warehouse:warehouse_id(name)")
+        .eq("product_id", productId)
+        .eq("warehouse_id", warehouseId)
+        .maybeSingle();
+
+    const stockNote = stockRow
+        ? ` ${escapeHtml(stockRow.product?.name ?? "Product")} now has ${stockRow.quantity} units in ${escapeHtml(stockRow.warehouse?.name ?? "that warehouse")}.`
+        : "";
+
+    statusDiv.innerHTML = `Purchase #${data} recorded.${stockNote} <a href="/inventory/index.html">View Inventory &rarr;</a>`;
     statusDiv.className = "status-msg status-ok";
     document.getElementById("purchase-form").reset();
+    updateFormState();
     loadPurchaseHistory();
 });
 

@@ -42,6 +42,22 @@ async function fillTable(tableId, rows, rowMapper, colspan) {
     });
 }
 
+// FIX (UI-flow): shown on forms whose dropdowns depend on another table
+// already having at least one row -- e.g. Purchase Management needs a
+// Supplier, a Warehouse and a Product to exist before a purchase can be
+// recorded. Previously an empty dropdown just silently sent NaN/blank
+// values to Supabase and surfaced a raw Postgres/JS error. Call this
+// whenever a prerequisite list comes back empty, and disable the
+// submit button alongside it.
+// items: [{ label: "supplier", href: "/suppliers/index.html" }, ...]
+function missingPrereqHtml(items) {
+    const links = items.map(i => `<a href="${i.href}">${escapeHtml(i.label)}</a>`).join(" and ");
+    const plural = items.length > 1 ? "these" : "this";
+    return `<div class="status-msg status-error" style="display:block;">
+        You need at least one ${links} before you can do this — go add ${plural} first.
+    </div>`;
+}
+
 const PLATFORMS = ["Facebook", "Instagram", "WhatsApp", "Email"];
 
 const PLATFORM_COLOR = {

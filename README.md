@@ -1,4 +1,4 @@
-# SupplySphere
+# TrackChain
 
 An internal business management system for a company selling physical products — think an internal seller/ops dashboard, not a public storefront. Marketing, purchasing, warehouse, and shipment staff all work from one sidebar-navigated dashboard; a customer only ever sees two public pages (product catalog + shipment tracking). Built for a DBMS course project: PostgreSQL (via Supabase) handles all data logic — tables, triggers, functions, procedures, cursor, and analytics views — with a plain HTML/CSS/JS frontend.
 
@@ -32,7 +32,7 @@ No login system exists (same trust model the project has always had — this is 
 ## Project structure
 
 ```
-supplysphere/
+trackchain/
 ├── database/
 │   ├── schema.sql              -- tables, triggers, functions, procedures, cursor, views
 │   └── seed_data.sql           -- sample data for demo purposes
