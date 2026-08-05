@@ -107,7 +107,7 @@
                     <h2>Low stock</h2>
                     <div class="table-responsive">
                         <table id="low-stock-table">
-                            <thead><tr><th>Product</th><th>Quantity</th></tr></thead>
+                            <thead><tr><th>Product</th><th>Quantity</th><th></th></tr></thead>
                             <tbody></tbody>
                         </table>
                     </div>
@@ -277,11 +277,27 @@ async function loadTopSuppliers() {
         `<td>${escapeHtml(r.name)}</td><td>${r.product_count}</td>`, 2);
 }
 
+// FIX: low_stock_products() only returns product_id/name/quantity, not
+// which supplier makes it -- fetched separately so the Reorder link can
+// pre-select both the Supplier and Product on the Purchases page (same
+// pattern as the Inventory page's Low Stock tab).
 async function loadLowStock() {
     const { data, error } = await supabaseClient.rpc("low_stock_products", { p_threshold: 10 });
     if (error) return;
-    fillTable("low-stock-table", data, r =>
-        `<td>${escapeHtml(r.product_name)}</td><td><span class="badge badge-warning">${r.quantity} left</span></td>`, 2);
+
+    const productIds = [...new Set((data || []).map(r => r.product_id))];
+    let supplierByProduct = {};
+    if (productIds.length) {
+        const { data: products } = await supabaseClient
+            .from("product").select("product_id, supplier_id").in("product_id", productIds);
+        (products || []).forEach(p => { supplierByProduct[p.product_id] = p.supplier_id; });
+    }
+
+    fillTable("low-stock-table", data, r => {
+        const supplierId = supplierByProduct[r.product_id];
+        const reorderHref = `/purchases/index.html?supplier=${supplierId}&product=${r.product_id}`;
+        return `<td>${escapeHtml(r.product_name)}</td><td><span class="badge badge-warning">${r.quantity} left</span></td><td><a href="${reorderHref}"><button type="button" class="btn-ghost btn-small">Reorder</button></a></td>`;
+    }, 3);
 }
 
 async function loadRecentOrders() {

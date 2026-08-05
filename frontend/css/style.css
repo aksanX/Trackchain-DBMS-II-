@@ -593,6 +593,16 @@ form select:focus, form input:focus {
     background: #fff;
 }
 
+/* ---- Whole-number price fields: no up/down spinner arrows ---- */
+input.no-spinner::-webkit-inner-spin-button,
+input.no-spinner::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+input.no-spinner {
+    -moz-appearance: textfield;
+}
+
 /* ---- Checkbox pill group (platform selection) ---- */
 .checkbox-group {
     display: flex;

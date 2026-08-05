@@ -50,8 +50,18 @@
                 <div class="table-responsive">
                     <table id="supplier-table">
                         <thead>
-                            <tr><th>Name</th><th>Phone</th><th>Address</th><th>Actions</th></tr>
+                            <tr><th>Name</th><th>Phone</th><th>Address</th><th>Products</th><th>Actions</th></tr>
                         </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card full-width" id="supplier-products-card" style="display:none;">
+                <h2 id="supplier-products-title">Products</h2>
+                <div class="table-responsive">
+                    <table id="supplier-products-table">
+                        <thead><tr><th>Name</th><th>Category</th><th>Price</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -78,11 +88,14 @@ function renderSupplierRows(rows) {
         <td>${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.phone) || "-"}</td>
         <td>${escapeHtml(r.address) || "-"}</td>
+        <td>${r.product_count ?? 0}${(r.product_count ?? 0) > 0
+            ? ` <button type="button" class="btn-ghost btn-small view-products-btn" data-id="${r.supplier_id}" data-name="${escapeHtml(r.name)}">View</button>`
+            : ""}</td>
         <td class="table-actions">
             <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.supplier_id}">Edit</button>
             <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.supplier_id}">Delete</button>
         </td>
-    `, 4);
+    `, 5);
 
     document.querySelectorAll(".edit-btn").forEach(btn => {
         btn.addEventListener("click", () => startEdit(btn.dataset.id));
@@ -93,6 +106,30 @@ function renderSupplierRows(rows) {
         }
     });
     document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteSupplier(btn.dataset.id)));
+    document.querySelectorAll(".view-products-btn").forEach(btn =>
+        btn.addEventListener("click", () => showSupplierProducts(btn.dataset.id, btn.dataset.name)));
+}
+
+// FIX: same "expand a details table below" pattern Campaign Management
+// uses for "View links" -- lets you see exactly which products a
+// supplier has without leaving this page or guessing from the count.
+async function showSupplierProducts(supplierId, supplierName) {
+    const { data, error } = await supabaseClient
+        .from("product")
+        .select("name, category, price")
+        .eq("supplier_id", supplierId)
+        .order("name");
+    if (error) { console.error(error); return; }
+
+    document.getElementById("supplier-products-title").textContent = `${supplierName} — products`;
+    fillTable("supplier-products-table", data, p => `
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.category) || "-"}</td>
+        <td>${formatMoney(p.price)}</td>
+    `, 3);
+
+    document.getElementById("supplier-products-card").style.display = "block";
+    document.getElementById("supplier-products-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 // FIX: single source of truth for "what should the table show right now" --
@@ -108,9 +145,14 @@ function applyFilter() {
 }
 
 async function loadSuppliers() {
-    const { data, error } = await supabaseClient.from("supplier").select("*").order("name");
+    const [{ data, error }, { data: counts }] = await Promise.all([
+        supabaseClient.from("supplier").select("*").order("name"),
+        supabaseClient.from("supplier_product_count").select("supplier_id, product_count")
+    ]);
     if (error) { console.error(error); return; }
-    allSuppliers = data || [];
+    const countBySupplier = {};
+    (counts || []).forEach(c => { countBySupplier[c.supplier_id] = c.product_count; });
+    allSuppliers = (data || []).map(s => ({ ...s, product_count: countBySupplier[s.supplier_id] ?? 0 }));
     applyFilter(); // FIX: was renderSupplierRows(allSuppliers) -- ignored any active search
 }
 
@@ -144,6 +186,7 @@ document.getElementById("supplier-cancel").addEventListener("click", resetForm);
 document.getElementById("supplier-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const statusDiv = document.getElementById("supplier-status");
+    const submitBtn = document.getElementById("supplier-submit");
     const id = document.getElementById("supplier-id").value;
     const payload = {
         name: document.getElementById("supplier-name").value.trim(),
@@ -160,20 +203,27 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
         return;
     }
 
-    const { error } = id
-        ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
-        : await supabaseClient.from("supplier").insert(payload);
+    // FIX: without this, clicking Submit twice quickly (or a slow network)
+    // could fire the insert/update twice before the first one lands.
+    submitBtn.disabled = true;
+    try {
+        const { error } = id
+            ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
+            : await supabaseClient.from("supplier").insert(payload);
 
-    if (error) {
-        statusDiv.textContent = "Error: " + error.message;
-        statusDiv.className = "status-msg status-error";
-        return;
+        if (error) {
+            statusDiv.textContent = "Error: " + error.message;
+            statusDiv.className = "status-msg status-error";
+            return;
+        }
+
+        statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
+        statusDiv.className = "status-msg status-ok";
+        resetForm();
+        loadSuppliers();
+    } finally {
+        submitBtn.disabled = false;
     }
-
-    statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
-    statusDiv.className = "status-msg status-ok";
-    resetForm();
-    loadSuppliers();
 });
 
 async function deleteSupplier(id) {
