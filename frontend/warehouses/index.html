@@ -5,6 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SupplySphere — Warehouse</title>
 <link rel="stylesheet" href="/css/style.css">
+<style>
+/* Stock-flow pipeline (scoped to this page) */
+.flow-pipeline { display: flex; align-items: stretch; gap: 8px; flex-wrap: wrap; }
+
+.flow-stage {
+    flex: 1 1 180px; min-width: 168px;
+    display: flex; flex-direction: column; gap: 2px;
+    text-align: left;
+    width: auto; margin: 0;
+    padding: 16px 18px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--card-border);
+    box-shadow: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease;
+}
+.flow-stage:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.85); box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08); }
+.flow-stage.active { border-color: var(--accent-color); background: var(--accent-tint); box-shadow: 0 8px 22px rgba(99, 102, 241, 0.18); }
+
+.flow-stage .stage-head { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-muted); }
+.flow-stage .ico { width: 20px; height: 20px; color: var(--accent-color); flex-shrink: 0; }
+.flow-stage .stage-title { font-family: 'Outfit', sans-serif; font-size: 15px; font-weight: 600; margin-top: 10px; }
+.flow-stage .stage-metric { font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 700; line-height: 1.1; margin-top: 4px; }
+.flow-stage .stage-metric-label { font-size: 11.5px; color: var(--text-muted); }
+
+.flow-arrow { width: 22px; height: 22px; color: var(--baseline); align-self: center; flex: 0 0 auto; }
+
+.panel-note { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.55; }
+.panel-note code { font-size: 11px; background: rgba(0, 0, 0, 0.06); padding: 1px 5px; border-radius: 5px; }
+
+.flow-panel { display: none; }
+.flow-panel.active { display: block; animation: flowFade 0.26s ease; }
+@keyframes flowFade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* Sortable table headers */
+th.th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+th.th-sort:hover { color: var(--text-primary); }
+th.th-sort[data-dir="asc"]::after { content: " \25B2"; font-size: 9px; color: var(--accent-color); }
+th.th-sort[data-dir="desc"]::after { content: " \25BC"; font-size: 9px; color: var(--accent-color); }
+
+/* Visual polish */
+.stat-card { transition: transform 0.16s ease, box-shadow 0.16s ease; }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07); }
+
+td.num, th.num { text-align: right; }
+
+#warehouse-table tbody tr { transition: background 0.15s ease; }
+#warehouse-table tbody tr.row-active td { background: var(--accent-tint); }
+#warehouse-table tbody tr.row-active td:first-child { box-shadow: inset 3px 0 0 var(--accent-color); }
+
+.just-opened { animation: flowFade 0.3s ease; }
+.tbl-loading { color: var(--text-muted); font-style: italic; }
+
+@media (max-width: 720px) { .flow-arrow { display: none; } }
+</style>
 </head>
 <body>
 
@@ -14,11 +71,31 @@
         <header class="shell-header">
             <div>
                 <h1>Warehouse</h1>
-                <p>Physical locations that hold inventory.</p>
+                <p>Physical locations that hold inventory. Track stock value, move units between sites, and trace how stock flows in and out.</p>
             </div>
         </header>
 
         <main class="shell-content">
+
+            <!-- Overview across every warehouse -->
+            <section class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Warehouses</div>
+                    <div class="stat-value" id="ov-warehouses">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Products stocked</div>
+                    <div class="stat-value" id="ov-products">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total units</div>
+                    <div class="stat-value" id="ov-units">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total stock value</div>
+                    <div class="stat-value accent" id="ov-value">—</div>
+                </div>
+            </section>
 
             <div class="card full-width">
                 <h2 id="form-title">Add warehouse</h2>
@@ -40,15 +117,182 @@
                 <div id="warehouse-status" class="status-msg"></div>
             </div>
 
+            <!-- Move stock between warehouses (writes to inventory only) -->
+            <div class="card full-width">
+                <h2>Transfer stock</h2>
+                <p class="panel-note">Move units of a product from one warehouse to another. Both inventory rows are updated; total stock across the business is unchanged. The <code>inventory</code> audit trigger records both sides automatically.</p>
+                <form id="transfer-form">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="transfer-product">Product</label>
+                            <select id="transfer-product" required></select>
+                        </div>
+                        <div>
+                            <label for="transfer-qty">Quantity</label>
+                            <input type="number" id="transfer-qty" min="1" value="1" required>
+                        </div>
+                    </div>
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="transfer-from">From warehouse</label>
+                            <select id="transfer-from" required></select>
+                        </div>
+                        <div>
+                            <label for="transfer-to">To warehouse</label>
+                            <select id="transfer-to" required></select>
+                        </div>
+                    </div>
+                    <button type="submit" id="transfer-submit">Transfer stock</button>
+                </form>
+                <div id="transfer-status" class="status-msg"></div>
+            </div>
+
             <div class="card full-width">
                 <h2>Warehouse list</h2>
+                <div class="toolbar">
+                    <input type="text" id="warehouse-search" class="search-input" placeholder="Search name or location…">
+                    <button type="button" class="btn-ghost btn-small" id="warehouse-export">Export CSV</button>
+                </div>
                 <div class="table-responsive">
                     <table id="warehouse-table">
-                        <thead><tr><th>Name</th><th>Location</th><th>Actions</th></tr></thead>
+                        <thead><tr>
+                            <th class="th-sort" data-key="name">Name</th>
+                            <th class="th-sort" data-key="location">Location</th>
+                            <th class="th-sort num" data-key="units">Units on hand</th>
+                            <th class="th-sort num" data-key="value">Stock value</th>
+                            <th>Actions</th>
+                        </tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
             </div>
+
+            <!-- Per-warehouse stock-flow view (populated when a warehouse is opened) -->
+            <section id="warehouse-detail" style="display:none; flex-direction:column; gap:24px;">
+
+                <div class="card full-width">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+                        <div>
+                            <h2 id="detail-name" style="margin:0;">Warehouse</h2>
+                            <span class="card-subtitle" id="detail-location" style="margin:4px 0 0; display:inline-block;"></span>
+                        </div>
+                        <button type="button" class="btn-ghost btn-small" id="detail-close">Close</button>
+                    </div>
+                </div>
+
+                <!-- Interactive pipeline: click a stage to see its records below -->
+                <div class="card full-width">
+                    <h2>Stock flow</h2>
+                    <p class="panel-note">Follow this warehouse's stock left to right — select any stage to see the records behind it.</p>
+                    <div class="flow-pipeline">
+                        <button type="button" class="flow-stage" data-stage="in">
+                            <span class="stage-head">
+                                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="M8 10l4 4 4-4"/><path d="M5 21h14"/></svg>
+                                Step 1
+                            </span>
+                            <span class="stage-title">Stock in</span>
+                            <span class="stage-metric" id="metric-in">—</span>
+                            <span class="stage-metric-label">units received (all-time)</span>
+                        </button>
+
+                        <svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+
+                        <button type="button" class="flow-stage" data-stage="onhand">
+                            <span class="stage-head">
+                                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8l-9-5-9 5v8l9 5 9-5z"/><path d="M3.3 7.5L12 12l8.7-4.5"/><path d="M12 12v9"/></svg>
+                                Step 2
+                            </span>
+                            <span class="stage-title">On hand</span>
+                            <span class="stage-metric" id="metric-onhand">—</span>
+                            <span class="stage-metric-label">units stored now</span>
+                        </button>
+
+                        <svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+
+                        <button type="button" class="flow-stage" data-stage="out">
+                            <span class="stage-head">
+                                <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V10"/><path d="M8 14l4-4 4 4"/><path d="M5 3h14"/></svg>
+                                Step 3
+                            </span>
+                            <span class="stage-title">Stock out</span>
+                            <span class="stage-metric" id="metric-out">—</span>
+                            <span class="stage-metric-label">related orders</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Panels -->
+                <div class="flow-panel" data-stage="in">
+                    <div class="card full-width">
+                        <h2>Stock received here</h2>
+                        <p class="panel-note">Every purchase delivered into this warehouse, tied accurately via <code>purchase.warehouse_id</code>. Each of these raised the on-hand quantities through the <code>increase_inventory</code> trigger.</p>
+                        <div class="toolbar">
+                            <input type="text" id="in-search" class="search-input" placeholder="Search supplier or product…">
+                            <button type="button" class="btn-ghost btn-small" id="in-export">Export CSV</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="stock-in-table">
+                                <thead><tr>
+                                    <th class="th-sort" data-key="date">Date</th>
+                                    <th class="th-sort" data-key="supplier">Supplier</th>
+                                    <th class="th-sort" data-key="product">Product</th>
+                                    <th class="th-sort num" data-key="qty">Qty</th>
+                                    <th class="th-sort num" data-key="cost">Unit cost</th>
+                                    <th class="th-sort num" data-key="total">Total</th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-panel active" data-stage="onhand">
+                    <div class="card full-width">
+                        <h2>On hand now</h2>
+                        <p class="panel-note" id="onhand-summary">Live quantity of each product currently stored here.</p>
+                        <div class="toolbar">
+                            <input type="text" id="onhand-search" class="search-input" placeholder="Search product or category…">
+                            <button type="button" class="btn-ghost btn-small" id="onhand-export">Export CSV</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="stock-onhand-table">
+                                <thead><tr>
+                                    <th class="th-sort" data-key="product">Product</th>
+                                    <th class="th-sort" data-key="category">Category</th>
+                                    <th class="th-sort num" data-key="quantity">Quantity</th>
+                                    <th class="th-sort num" data-key="price">Unit price</th>
+                                    <th class="th-sort num" data-key="value">Value</th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flow-panel" data-stage="out">
+                    <div class="card full-width">
+                        <h2>Stock leaving</h2>
+                        <p class="panel-note">Orders that include a product stocked here, with shipment status. The schema does not record which warehouse an order shipped from, so this is derived <em>through the products stocked here</em> — not a per-warehouse fulfillment record.</p>
+                        <div class="toolbar">
+                            <input type="text" id="out-search" class="search-input" placeholder="Search customer or order #…">
+                            <button type="button" class="btn-ghost btn-small" id="out-export">Export CSV</button>
+                        </div>
+                        <div class="table-responsive">
+                            <table id="stock-out-table">
+                                <thead><tr>
+                                    <th class="th-sort" data-key="order_id">Order</th>
+                                    <th class="th-sort" data-key="customer">Customer</th>
+                                    <th class="th-sort" data-key="date">Date</th>
+                                    <th class="th-sort num" data-key="units">Units (stocked here)</th>
+                                    <th class="th-sort" data-key="status">Shipment</th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
 
         </main>
     </div>
@@ -63,22 +307,237 @@
 renderSidebar("warehouses");
 
 let allWarehouses = [];
+let selectedWarehouseId = null;
+let selectedWarehouseName = "warehouse";
+
+// ---- Small utilities ----------------------------------------------------
+
+function animateCount(el, target) {
+    const duration = 550;
+    const start = performance.now();
+    function tick(now) {
+        const t = Math.min(1, (now - start) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = Math.round(target * eased).toLocaleString();
+        if (t < 1) requestAnimationFrame(tick);
+        else el.textContent = target.toLocaleString();
+    }
+    requestAnimationFrame(tick);
+}
+
+function slug(s) {
+    return (s || "warehouse").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "warehouse";
+}
+
+function csvCell(v) {
+    const s = (v === null || v === undefined) ? "" : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function downloadCsv(filename, headers, rows) {
+    const lines = [headers.map(csvCell).join(",")];
+    rows.forEach(r => lines.push(r.map(csvCell).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// A table with search box, click-to-sort headers, and CSV export, all driven
+// by a plain array of flat row objects. Re-usable across all four tables.
+function createTableView(cfg) {
+    const state = { q: "", key: null, dir: 1, raw: [], view: [] };
+
+    function apply() {
+        let rows = state.raw;
+        if (state.q) {
+            rows = rows.filter(r => cfg.searchFields.some(f =>
+                String(r[f] ?? "").toLowerCase().includes(state.q)));
+        }
+        if (state.key) {
+            rows = [...rows].sort((a, b) => {
+                let x = a[state.key], y = b[state.key];
+                if (typeof x === "string") x = x.toLowerCase();
+                if (typeof y === "string") y = y.toLowerCase();
+                if (x === undefined || x === null) return 1;
+                if (y === undefined || y === null) return -1;
+                if (x < y) return -1 * state.dir;
+                if (x > y) return 1 * state.dir;
+                return 0;
+            });
+        }
+        state.view = rows;
+        fillTable(cfg.tableId, rows, cfg.rowHtml, cfg.colspan);
+        if (!rows.length && cfg.emptyMsg) {
+            const cell = document.querySelector(`#${cfg.tableId} tbody td`);
+            if (cell) cell.textContent = cfg.emptyMsg;
+        }
+        if (cfg.afterRender) cfg.afterRender();
+    }
+
+    if (cfg.searchId) {
+        const inp = document.getElementById(cfg.searchId);
+        if (inp) inp.addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); apply(); });
+    }
+
+    const ths = document.querySelectorAll(`#${cfg.tableId} thead th[data-key]`);
+    ths.forEach(th => th.addEventListener("click", () => {
+        const k = th.dataset.key;
+        if (state.key === k) state.dir *= -1; else { state.key = k; state.dir = 1; }
+        ths.forEach(t => t.removeAttribute("data-dir"));
+        th.setAttribute("data-dir", state.dir === 1 ? "asc" : "desc");
+        apply();
+    }));
+
+    if (cfg.exportId) {
+        const btn = document.getElementById(cfg.exportId);
+        if (btn) btn.addEventListener("click", () => {
+            if (!state.view.length) return;
+            downloadCsv(cfg.csvName(), cfg.csvHeaders, state.view.map(cfg.csvRow));
+        });
+    }
+
+    return {
+        setRaw(rows) { state.raw = rows || []; apply(); },
+        loading() {
+            const tb = document.querySelector(`#${cfg.tableId} tbody`);
+            if (tb) tb.innerHTML = `<tr><td colspan="${cfg.colspan}" class="tbl-loading">Loading…</td></tr>`;
+        }
+    };
+}
+
+// ---- Table views --------------------------------------------------------
+
+const warehouseView = createTableView({
+    tableId: "warehouse-table", searchId: "warehouse-search", exportId: "warehouse-export",
+    colspan: 5, searchFields: ["name", "location"],
+    emptyMsg: "No warehouses yet — add one above.",
+    rowHtml: r => `
+        <td>${escapeHtml(r.name)}</td>
+        <td>${escapeHtml(r.location) || "-"}</td>
+        <td class="num">${r.units.toLocaleString()}</td>
+        <td class="num">${formatMoney(r.value)}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-small view-btn" data-id="${r.warehouse_id}">View flow</button>
+            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.warehouse_id}">Edit</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.warehouse_id}">Delete</button>
+        </td>`,
+    afterRender: () => {
+        document.querySelectorAll(".view-btn").forEach(b => {
+            b.addEventListener("click", () => viewWarehouse(b.dataset.id));
+            if (String(b.dataset.id) === String(selectedWarehouseId)) {
+                const tr = b.closest("tr");
+                if (tr) tr.classList.add("row-active");
+            }
+        });
+        document.querySelectorAll(".edit-btn").forEach(b => b.addEventListener("click", () => startEdit(b.dataset.id)));
+        document.querySelectorAll(".delete-btn").forEach(b => b.addEventListener("click", () => deleteWarehouse(b.dataset.id)));
+    },
+    csvName: () => "warehouses.csv",
+    csvHeaders: ["Name", "Location", "Units on hand", "Stock value"],
+    csvRow: r => [r.name, r.location || "", r.units, r.value.toFixed(2)]
+});
+
+const onHandView = createTableView({
+    tableId: "stock-onhand-table", searchId: "onhand-search", exportId: "onhand-export",
+    colspan: 5, searchFields: ["product", "category"],
+    emptyMsg: "Nothing stored in this warehouse yet.",
+    rowHtml: r => {
+        let qCell;
+        if (r.quantity === 0) qCell = `<span class="badge badge-critical">0</span>`;
+        else if (r.quantity < 10) qCell = `<span class="badge badge-warning">${r.quantity} left</span>`;
+        else qCell = r.quantity;
+        return `<td>${escapeHtml(r.product)}</td>
+                <td>${escapeHtml(r.category) || "-"}</td>
+                <td class="num">${qCell}</td>
+                <td class="num">${formatMoney(r.price)}</td>
+                <td class="num">${formatMoney(r.value)}</td>`;
+    },
+    csvName: () => `${slug(selectedWarehouseName)}-onhand.csv`,
+    csvHeaders: ["Product", "Category", "Quantity", "Unit price", "Value"],
+    csvRow: r => [r.product, r.category || "", r.quantity, r.price.toFixed(2), r.value.toFixed(2)]
+});
+
+const stockInView = createTableView({
+    tableId: "stock-in-table", searchId: "in-search", exportId: "in-export",
+    colspan: 6, searchFields: ["supplier", "product"],
+    emptyMsg: "No purchases have been delivered into this warehouse yet.",
+    rowHtml: r => `
+        <td>${formatDate(r.date)}</td>
+        <td>${escapeHtml(r.supplier) || "-"}</td>
+        <td>${escapeHtml(r.product) || "-"}</td>
+        <td class="num">${r.qty}</td>
+        <td class="num">${formatMoney(r.cost)}</td>
+        <td class="num">${formatMoney(r.total)}</td>`,
+    csvName: () => `${slug(selectedWarehouseName)}-stock-in.csv`,
+    csvHeaders: ["Date", "Supplier", "Product", "Qty", "Unit cost", "Total"],
+    csvRow: r => [formatDate(r.date), r.supplier || "", r.product || "", r.qty, r.cost.toFixed(2), r.total.toFixed(2)]
+});
+
+const stockOutView = createTableView({
+    tableId: "stock-out-table", searchId: "out-search", exportId: "out-export",
+    colspan: 5, searchFields: ["customer", "order_id"],
+    emptyMsg: "No orders involve a product stocked here yet.",
+    rowHtml: r => `
+        <td>#${r.order_id}</td>
+        <td>${escapeHtml(r.customer) || "-"}</td>
+        <td>${formatDate(r.date)}</td>
+        <td class="num">${r.units}</td>
+        <td>${statusBadge(r.status)}</td>`,
+    csvName: () => `${slug(selectedWarehouseName)}-stock-out.csv`,
+    csvHeaders: ["Order", "Customer", "Date", "Units", "Shipment"],
+    csvRow: r => [r.order_id, r.customer || "", formatDate(r.date), r.units, r.status || "No shipment"]
+});
+
+// ---- Pipeline stage switching -------------------------------------------
+
+function activateStage(stage) {
+    document.querySelectorAll(".flow-stage").forEach(s => s.classList.toggle("active", s.dataset.stage === stage));
+    document.querySelectorAll(".flow-panel").forEach(p => p.classList.toggle("active", p.dataset.stage === stage));
+}
+document.querySelectorAll(".flow-stage").forEach(s => s.addEventListener("click", () => activateStage(s.dataset.stage)));
+
+// ---- Load warehouses + overview -----------------------------------------
 
 async function loadWarehouses() {
     const { data, error } = await supabaseClient.from("warehouse").select("*").order("name");
     if (error) { console.error(error); return; }
     allWarehouses = data || [];
-    fillTable("warehouse-table", allWarehouses, r => `
-        <td>${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.location) || "-"}</td>
-        <td class="table-actions">
-            <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.warehouse_id}">Edit</button>
-            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.warehouse_id}">Delete</button>
-        </td>
-    `, 3);
-    document.querySelectorAll(".edit-btn").forEach(btn => btn.addEventListener("click", () => startEdit(btn.dataset.id)));
-    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteWarehouse(btn.dataset.id)));
+
+    // One inventory read powers per-warehouse units/value AND the overview.
+    const { data: inv } = await supabaseClient
+        .from("inventory")
+        .select("warehouse_id, product_id, quantity, product:product_id(price)");
+
+    const unitsBy = {}, valueBy = {}, distinctProducts = new Set();
+    let totalUnits = 0, totalValue = 0;
+    (inv || []).forEach(r => {
+        const price = Number(r.product?.price) || 0;
+        unitsBy[r.warehouse_id] = (unitsBy[r.warehouse_id] || 0) + r.quantity;
+        valueBy[r.warehouse_id] = (valueBy[r.warehouse_id] || 0) + r.quantity * price;
+        distinctProducts.add(r.product_id);
+        totalUnits += r.quantity;
+        totalValue += r.quantity * price;
+    });
+
+    animateCount(document.getElementById("ov-warehouses"), allWarehouses.length);
+    animateCount(document.getElementById("ov-products"), distinctProducts.size);
+    animateCount(document.getElementById("ov-units"), totalUnits);
+    document.getElementById("ov-value").textContent = formatMoney(totalValue);
+
+    warehouseView.setRaw(allWarehouses.map(w => ({
+        warehouse_id: w.warehouse_id,
+        name: w.name,
+        location: w.location,
+        units: unitsBy[w.warehouse_id] || 0,
+        value: valueBy[w.warehouse_id] || 0
+    })));
+
+    populateTransferSelects();
 }
+
+// ---- Warehouse CRUD -----------------------------------------------------
 
 function startEdit(id) {
     const w = allWarehouses.find(r => String(r.warehouse_id) === String(id));
@@ -99,7 +558,6 @@ function resetForm() {
     document.getElementById("warehouse-submit").textContent = "Add warehouse";
     document.getElementById("warehouse-cancel").style.display = "none";
 }
-
 document.getElementById("warehouse-cancel").addEventListener("click", resetForm);
 
 document.getElementById("warehouse-form").addEventListener("submit", async (e) => {
@@ -123,6 +581,11 @@ document.getElementById("warehouse-form").addEventListener("submit", async (e) =
 
     statusDiv.textContent = id ? "Warehouse updated." : "Warehouse added.";
     statusDiv.className = "status-msg status-ok";
+    if (id && String(id) === String(selectedWarehouseId)) {
+        selectedWarehouseName = payload.name;
+        document.getElementById("detail-name").textContent = payload.name;
+        document.getElementById("detail-location").textContent = payload.location || "No location set";
+    }
     resetForm();
     loadWarehouses();
 });
@@ -138,9 +601,231 @@ async function deleteWarehouse(id) {
     }
     statusDiv.textContent = "Warehouse deleted.";
     statusDiv.className = "status-msg status-ok";
+    if (String(id) === String(selectedWarehouseId)) closeDetail();
     loadWarehouses();
 }
 
+// ---- Transfer stock -----------------------------------------------------
+
+async function populateTransferSelects() {
+    const { data: products } = await supabaseClient.from("product").select("product_id, name").order("name");
+    const prodSel = document.getElementById("transfer-product");
+    prodSel.innerHTML = (products || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+
+    const whOptions = allWarehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
+    document.getElementById("transfer-from").innerHTML = whOptions;
+    const toSel = document.getElementById("transfer-to");
+    toSel.innerHTML = whOptions;
+    if (allWarehouses.length > 1) toSel.selectedIndex = 1;  // default to a different warehouse
+}
+
+document.getElementById("transfer-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("transfer-status");
+    const productId = parseInt(document.getElementById("transfer-product").value);
+    const fromId = parseInt(document.getElementById("transfer-from").value);
+    const toId = parseInt(document.getElementById("transfer-to").value);
+    const qty = parseInt(document.getElementById("transfer-qty").value);
+
+    function fail(msg) { statusDiv.textContent = msg; statusDiv.className = "status-msg status-error"; }
+
+    if (fromId === toId) return fail("Pick two different warehouses.");
+    if (!(qty > 0)) return fail("Quantity must be greater than zero.");
+
+    // Source must exist and hold enough of the product.
+    const { data: src } = await supabaseClient
+        .from("inventory").select("inventory_id, quantity")
+        .eq("warehouse_id", fromId).eq("product_id", productId).maybeSingle();
+    if (!src || src.quantity < qty) {
+        return fail(`Not enough stock in the source warehouse (has ${src ? src.quantity : 0}, need ${qty}).`);
+    }
+
+    // Deduct from source.
+    const { error: srcErr } = await supabaseClient
+        .from("inventory").update({ quantity: src.quantity - qty }).eq("inventory_id", src.inventory_id);
+    if (srcErr) return fail("Transfer failed on source: " + srcErr.message);
+
+    // Add to destination (update existing row, or create it).
+    const { data: dest } = await supabaseClient
+        .from("inventory").select("inventory_id, quantity")
+        .eq("warehouse_id", toId).eq("product_id", productId).maybeSingle();
+
+    const { error: destErr } = dest
+        ? await supabaseClient.from("inventory").update({ quantity: dest.quantity + qty }).eq("inventory_id", dest.inventory_id)
+        : await supabaseClient.from("inventory").insert({ warehouse_id: toId, product_id: productId, quantity: qty });
+
+    if (destErr) {
+        // Best-effort rollback of the source deduction.
+        await supabaseClient.from("inventory").update({ quantity: src.quantity }).eq("inventory_id", src.inventory_id);
+        return fail("Transfer failed on destination (source restored): " + destErr.message);
+    }
+
+    const fromName = allWarehouses.find(w => w.warehouse_id === fromId)?.name || fromId;
+    const toName = allWarehouses.find(w => w.warehouse_id === toId)?.name || toId;
+    statusDiv.textContent = `Moved ${qty} unit${qty === 1 ? "" : "s"} from ${fromName} to ${toName}.`;
+    statusDiv.className = "status-msg status-ok";
+
+    await loadWarehouses();
+    if (selectedWarehouseId && [fromId, toId].includes(parseInt(selectedWarehouseId))) {
+        await refreshOpenDetail();
+    }
+});
+
+// ---- Per-warehouse stock-flow view --------------------------------------
+
+function closeDetail() {
+    selectedWarehouseId = null;
+    document.getElementById("warehouse-detail").style.display = "none";
+}
+document.getElementById("detail-close").addEventListener("click", closeDetail);
+
+async function viewWarehouse(id) {
+    const w = allWarehouses.find(r => String(r.warehouse_id) === String(id));
+    if (!w) return;
+    selectedWarehouseId = id;
+    selectedWarehouseName = w.name;
+
+    document.getElementById("detail-name").textContent = w.name;
+    document.getElementById("detail-location").textContent = w.location || "No location set";
+
+    ["metric-in", "metric-onhand", "metric-out"].forEach(mid => document.getElementById(mid).textContent = "…");
+    activateStage("onhand");
+    onHandView.loading();
+    stockInView.loading();
+    stockOutView.loading();
+
+    // Re-highlight the open row in the list.
+    document.querySelectorAll("#warehouse-table tbody tr.row-active").forEach(tr => tr.classList.remove("row-active"));
+    const openBtn = document.querySelector(`.view-btn[data-id="${id}"]`);
+    if (openBtn) { const tr = openBtn.closest("tr"); if (tr) tr.classList.add("row-active"); }
+
+    const detail = document.getElementById("warehouse-detail");
+    detail.style.display = "flex";
+    detail.classList.remove("just-opened");
+    void detail.offsetWidth;  // restart the fade animation on each open
+    detail.classList.add("just-opened");
+    detail.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    await refreshOpenDetail();
+}
+
+async function refreshOpenDetail() {
+    if (!selectedWarehouseId) return;
+    const onHand = await loadOnHand(selectedWarehouseId);
+    await loadStockIn(selectedWarehouseId);
+    await loadStockOut(onHand.productIds);
+}
+
+// STAGE 2: what's on hand now (accurate, warehouse-scoped)
+async function loadOnHand(id) {
+    const { data, error } = await supabaseClient
+        .from("inventory")
+        .select("quantity, product:product_id(product_id, name, category, price)")
+        .eq("warehouse_id", id)
+        .order("quantity", { ascending: true });
+    if (error) { console.error(error); return { productIds: [] }; }
+    const raw = data || [];
+
+    const rows = raw.map(r => {
+        const price = Number(r.product?.price) || 0;
+        return {
+            product: r.product?.name ?? "-",
+            category: r.product?.category ?? "",
+            quantity: r.quantity,
+            price: price,
+            value: r.quantity * price
+        };
+    });
+
+    const totalUnits = rows.reduce((s, r) => s + r.quantity, 0);
+    const lowCount = rows.filter(r => r.quantity > 0 && r.quantity < 10).length;
+    const outCount = rows.filter(r => r.quantity === 0).length;
+
+    animateCount(document.getElementById("metric-onhand"), totalUnits);
+    document.getElementById("onhand-summary").innerHTML =
+        `${rows.length} product${rows.length === 1 ? "" : "s"} stored` +
+        ` &middot; <strong>${lowCount}</strong> low (&lt;10)` +
+        ` &middot; <strong>${outCount}</strong> out of stock`;
+
+    onHandView.setRaw(rows);
+    return { productIds: raw.map(r => r.product?.product_id).filter(Boolean) };
+}
+
+// STAGE 1: stock received here (accurate, via purchase.warehouse_id)
+async function loadStockIn(id) {
+    const { data, error } = await supabaseClient
+        .from("purchase")
+        .select("purchase_id, purchase_date, supplier:supplier_id(name), purchase_item(quantity, unit_cost, product:product_id(name))")
+        .eq("warehouse_id", id)
+        .order("purchase_date", { ascending: false });
+    if (error) { console.error(error); return; }
+
+    const rows = [];
+    (data || []).forEach(p => {
+        (p.purchase_item || []).forEach(it => {
+            const qty = it.quantity, cost = Number(it.unit_cost) || 0;
+            rows.push({ date: p.purchase_date, supplier: p.supplier?.name ?? "", product: it.product?.name ?? "", qty, cost, total: qty * cost });
+        });
+    });
+
+    animateCount(document.getElementById("metric-in"), rows.reduce((s, r) => s + r.qty, 0));
+    stockInView.setRaw(rows);
+}
+
+// STAGE 3: stock leaving (approximate — derived through stocked products)
+async function loadStockOut(productIds) {
+    if (!productIds.length) {
+        animateCount(document.getElementById("metric-out"), 0);
+        stockOutView.setRaw([]);
+        return;
+    }
+
+    const { data: items, error } = await supabaseClient
+        .from("order_item")
+        .select("order_id, quantity, product_id, order:order_id(order_id, order_date, customer:customer_id(name))")
+        .in("product_id", productIds);
+    if (error) { console.error(error); return; }
+
+    const byOrder = {};
+    (items || []).forEach(it => {
+        const oid = it.order_id;
+        if (!byOrder[oid]) byOrder[oid] = { order_id: oid, date: it.order?.order_date, customer: it.order?.customer?.name ?? "", units: 0, status: undefined };
+        byOrder[oid].units += it.quantity;
+    });
+
+    const orders = Object.values(byOrder).sort((a, b) => new Date(b.date) - new Date(a.date));
+    animateCount(document.getElementById("metric-out"), orders.length);
+
+    const statusByOrder = await latestStatusByOrder(orders.map(o => o.order_id));
+    orders.forEach(o => { o.status = statusByOrder[o.order_id]; });
+
+    stockOutView.setRaw(orders);
+}
+
+async function latestStatusByOrder(orderIds) {
+    if (!orderIds.length) return {};
+
+    const { data: shipments } = await supabaseClient
+        .from("shipment").select("shipment_id, order_id").in("order_id", orderIds);
+    const shipmentToOrder = {};
+    (shipments || []).forEach(s => { shipmentToOrder[s.shipment_id] = s.order_id; });
+
+    const shipmentIds = Object.keys(shipmentToOrder).map(Number);
+    if (!shipmentIds.length) return {};
+
+    const { data: statuses } = await supabaseClient
+        .from("shipment_status").select("shipment_id, status, updated_time")
+        .in("shipment_id", shipmentIds).order("updated_time", { ascending: false });
+
+    const latestByShipment = {};
+    (statuses || []).forEach(r => { if (!(r.shipment_id in latestByShipment)) latestByShipment[r.shipment_id] = r.status; });
+
+    const result = {};
+    Object.entries(latestByShipment).forEach(([sid, status]) => { result[shipmentToOrder[sid]] = status; });
+    return result;
+}
+
+warehouseView.loading();
 loadWarehouses();
 </script>
 
