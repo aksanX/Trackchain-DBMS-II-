@@ -14,7 +14,6 @@
         <header class="shell-header">
             <div>
                 <h1>Purchase Management</h1>
-                <p>Inventory should never magically increase — every unit is traceable to a purchase from a supplier into a warehouse.</p>
             </div>
         </header>
 
@@ -45,7 +44,6 @@
                      (blocked if that stock's already been sold) -- see the Delete
                      button in Purchase history below. There's still no Edit, since
                      changing quantity/cost after the fact has no safe equivalent. -->
-                <p class="card-subtitle">Double-check before you submit — purchases can be deleted afterward (which reverses the stock added), but not edited.</p>
                 <!-- FIX: shown instead of a raw insert error when a supplier/warehouse/product doesn't exist yet -->
                 <div id="purchase-prereq-warning"></div>
                 <form id="purchase-form">
@@ -92,7 +90,6 @@
                     </div>
                     <button type="button" class="btn-ghost btn-small" id="purchase-export">Export CSV</button>
                 </div>
-                <p class="field-hint">Search and date range only cover the purchases loaded so far — click "Load more" below to reach further back.</p>
                 <div class="table-responsive">
                     <table id="purchase-table">
                         <thead>
@@ -104,7 +101,7 @@
                                 <th class="th-sort num" data-key="quantity">Qty</th>
                                 <th class="th-sort num" data-key="unit_cost">Unit cost</th>
                                 <th class="th-sort num" data-key="total_cost">Total</th>
-                                <th>Actions</th>
+                                <th style="text-align:center;">Actions</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -259,12 +256,12 @@ const purchaseView = createTableView({
         <td class="num">${formatMoney(r.unit_cost)}</td>
         <td class="num">${formatMoney(r.total_cost)}</td>
         <td class="table-actions">
-            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.purchase_id}">Delete</button>
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.purchase_id}" data-summary="${escapeHtml(r.product_name)} x${r.quantity} from ${escapeHtml(r.supplier_name)}, ${escapeHtml(formatMoney(r.total_cost))}">Delete</button>
         </td>
     `,
     afterRender: () => {
         document.querySelectorAll("#purchase-table .delete-btn").forEach(btn =>
-            btn.addEventListener("click", () => deletePurchase(btn.dataset.id)));
+            btn.addEventListener("click", () => deletePurchase(btn.dataset.id, btn.dataset.summary)));
     }
 });
 
@@ -272,13 +269,13 @@ function refreshPurchaseView() {
     purchaseView.setRaw(applyDateRangeFilter(allPurchaseHistory));
 }
 
-// Reuses the existing button:disabled styling as the "this is the current
-// selection" indicator, instead of introducing a new active-button visual.
 function setActiveRange(days) {
     dateRangeDays = days;
     document.querySelectorAll(".range-btn").forEach(btn => {
         const btnDays = btn.dataset.days ? Number(btn.dataset.days) : null;
-        btn.disabled = (btnDays === days);
+        const isActive = btnDays === days;
+        btn.classList.toggle("is-active", isActive);
+        btn.setAttribute("aria-pressed", String(isActive));
     });
     refreshPurchaseView();
 }
@@ -299,8 +296,19 @@ function friendlyDeleteError(message) {
     return "Could not delete: " + message;
 }
 
-async function deletePurchase(id) {
-    if (!confirm("Delete this purchase? This reverses the stock it added, and will fail if that stock has already been sold.")) return;
+// FIX: deleting a purchase reverses real inventory -- a meaningfully bigger
+// risk than deleting a supplier/product with no dependents, so this gets a
+// stronger tier than a single confirm(): the exact word DELETE must be
+// typed, with the specific line item restated so there's no doubt what's
+// being reversed. Still a native dialog (prompt()), consistent with the
+// rest of the app's confirm()-based pattern -- no custom modal.
+async function deletePurchase(id, summary) {
+    const typed = prompt(
+        `This reverses the stock added by:\n\n${summary || "purchase #" + id}\n\n` +
+        `It will fail if that stock has already been sold. Type DELETE to confirm.`
+    );
+    if (typed !== "DELETE") return;
+
     const { error } = await supabaseClient.from("purchase").delete().eq("purchase_id", id);
     const statusDiv = document.getElementById("purchase-status");
     if (error) {

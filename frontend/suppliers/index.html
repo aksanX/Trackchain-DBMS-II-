@@ -14,7 +14,6 @@
         <header class="shell-header">
             <div>
                 <h1>Supplier Management</h1>
-                <p>Add, edit and search the suppliers your products come from.</p>
             </div>
         </header>
 
@@ -33,7 +32,7 @@
                     <div class="stat-label">No products on file</div>
                     <div class="stat-value" id="stat-zero-products">—</div>
                 </div>
-                <div class="stat-card">
+                <div class="stat-card" id="stat-duplicates-card" style="cursor:pointer;" title="Click to filter the table to just these">
                     <div class="stat-label">Possible duplicates</div>
                     <div class="stat-value accent" id="stat-duplicates">—</div>
                 </div>
@@ -47,16 +46,24 @@
                         <div>
                             <label for="supplier-name">Name</label>
                             <input type="text" id="supplier-name" required maxlength="150">
-                            <div class="field-hint" id="supplier-name-hint">0/150</div>
                         </div>
                         <div>
                             <label for="supplier-phone">Phone</label>
                             <input type="text" id="supplier-phone" maxlength="20">
-                            <div class="field-hint">Digits, spaces, +, -, ( ) only — optional.</div>
                         </div>
                     </div>
                     <label for="supplier-address">Address</label>
                     <input type="text" id="supplier-address">
+                    <section id="supplier-products-section" class="supplier-products-section" aria-labelledby="supplier-products-title">
+                        <div class="supplier-products-heading">
+                            <div>
+                                <h3 id="supplier-products-title">Products supplied</h3>
+                            </div>
+                            <button type="button" class="btn-ghost btn-small" id="add-supplier-product">+ Add product</button>
+                        </div>
+                        <div id="supplier-product-rows" class="supplier-product-list"></div>
+                        <div id="supplier-product-editor"></div>
+                    </section>
                     <button type="submit" id="supplier-submit">Add supplier</button>
                     <button type="button" class="btn-ghost" id="supplier-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
                 </form>
@@ -77,7 +84,7 @@
                                 <th class="th-sort" data-key="phone">Phone</th>
                                 <th class="th-sort" data-key="address">Address</th>
                                 <th class="th-sort" data-key="product_count">Products</th>
-                                <th>Actions</th>
+                                <th style="text-align:center;">Actions</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -135,6 +142,81 @@ renderSidebar("suppliers");
 let allSuppliers = [];
 let editingId = null;         // FIX: tracked so the row being edited can be highlighted in the table
 let openDetailsId = null;     // tracked so the row whose details panel is open stays highlighted too
+const SUPPLIER_PRODUCT_DRAFTS_KEY = "trackchain:supplier-product-drafts";
+let supplierProductDrafts = [];
+
+function saveSupplierProductDrafts(supplierId, products) {
+    try {
+        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
+        const existing = Array.isArray(drafts[supplierId]) ? drafts[supplierId] : [];
+        products.forEach(product => {
+            const alreadySaved = existing.some(item =>
+                normalizeSupplierName(item.name) === normalizeSupplierName(product.name));
+            if (!alreadySaved) existing.push({ name: product.name, category: product.category });
+        });
+        drafts[supplierId] = existing;
+        localStorage.setItem(SUPPLIER_PRODUCT_DRAFTS_KEY, JSON.stringify(drafts));
+    } catch (error) {
+        console.warn("Could not save supplier product suggestions", error);
+    }
+}
+
+function renderSupplierProductList() {
+    const rows = document.getElementById("supplier-product-rows");
+    rows.innerHTML = supplierProductDrafts.map((product, index) => `
+        <div class="supplier-product-summary">
+            <span>${escapeHtml(product.name)}</span>
+            <span>${escapeHtml(product.category || "-")}</span>
+            <button type="button" class="btn-ghost btn-small btn-danger supplier-product-remove" data-index="${index}">Remove</button>
+        </div>`).join("");
+    rows.querySelectorAll(".supplier-product-remove").forEach(button => button.addEventListener("click", () => {
+        supplierProductDrafts.splice(Number(button.dataset.index), 1);
+        renderSupplierProductList();
+    }));
+}
+
+function closeSupplierProductEditor() {
+    document.getElementById("supplier-product-editor").innerHTML = "";
+    document.getElementById("add-supplier-product").disabled = false;
+}
+
+function openSupplierProductEditor() {
+    const editor = document.getElementById("supplier-product-editor");
+    if (editor.children.length) {
+        editor.querySelector("input")?.focus();
+        return;
+    }
+    document.getElementById("add-supplier-product").disabled = true;
+    editor.innerHTML = `
+        <div class="supplier-product-editor-box">
+            <div class="form-row two-col">
+                <div><label>Product name</label><input type="text" id="new-supplier-product-name" maxlength="150"></div>
+                <div><label>Category</label><input type="text" id="new-supplier-product-category" maxlength="80"></div>
+            </div>
+            <button type="button" class="btn-ghost btn-small" id="save-supplier-product">Add</button>
+            <button type="button" class="btn-ghost btn-small" id="cancel-supplier-product">Cancel</button>
+        </div>`;
+    document.getElementById("new-supplier-product-name").focus();
+    document.getElementById("cancel-supplier-product").addEventListener("click", closeSupplierProductEditor);
+    document.getElementById("save-supplier-product").addEventListener("click", () => {
+        const name = document.getElementById("new-supplier-product-name").value.trim();
+        const category = document.getElementById("new-supplier-product-category").value.trim();
+        if (!name) return;
+        supplierProductDrafts.push({ name, category: category || null });
+        renderSupplierProductList();
+        closeSupplierProductEditor();
+    });
+}
+
+function resetSupplierProductRows() {
+    supplierProductDrafts = [];
+    renderSupplierProductList();
+    closeSupplierProductEditor();
+}
+
+function collectSupplierProducts() { return [...supplierProductDrafts]; }
+
+document.getElementById("add-supplier-product").addEventListener("click", openSupplierProductEditor);
 
 // Name alone doesn't prove two suppliers are the same real-world entity
 // (common names repeat), so this is a soft warning the user can dismiss --
@@ -165,6 +247,21 @@ function isValidPhone(phone) {
     return /^[0-9+\-() ]{6,20}$/.test(phone);
 }
 
+// Display-only formatting for standard BD numbers -- storage/validation
+// above stays free-text, this just makes the table read consistently
+// (e.g. "01712345678" -> "01712-345678") without touching what's saved.
+function formatPhone(phone) {
+    if (!phone) return "";
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 11 && digits.startsWith("0")) {
+        return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+    }
+    if (digits.length === 13 && digits.startsWith("880")) {
+        return `+880 ${digits.slice(3, 7)}-${digits.slice(7)}`;
+    }
+    return phone; // doesn't match a known pattern -- show it exactly as typed
+}
+
 const supplierView = createTableView({
     tableId: "supplier-table",
     searchId: "supplier-search",
@@ -178,7 +275,7 @@ const supplierView = createTableView({
     csvRow: r => [r.name, r.phone || "", r.address || "", r.product_count],
     rowHtml: r => `
         <td data-id="${r.supplier_id}">${escapeHtml(r.name)}</td>
-        <td>${escapeHtml(r.phone) || "-"}</td>
+        <td>${escapeHtml(formatPhone(r.phone)) || "-"}</td>
         <td>${escapeHtml(r.address) || "-"}</td>
         <td>${r.product_count ?? 0}${(r.product_count ?? 0) > 0
             ? ` <button type="button" class="btn-ghost btn-small view-products-btn" data-id="${r.supplier_id}" data-name="${escapeHtml(r.name)}">Details</button>`
@@ -219,6 +316,26 @@ function updateSupplierStats() {
     animateCount(document.getElementById("stat-duplicates"), duplicateCount);
 }
 
+// Clicking the "Possible duplicates" stat narrows the table to exactly the
+// rows that already trigger the insert/update-time confirm() warning,
+// instead of leaving it as a number with no way to act on it.
+let duplicatesOnly = false;
+function applySupplierFilter(rows) {
+    return duplicatesOnly
+        ? rows.filter(s => findPossibleDuplicates(s.name, s.phone, s.supplier_id).length > 0)
+        : rows;
+}
+function refreshSupplierView() {
+    supplierView.setRaw(applySupplierFilter(allSuppliers));
+}
+document.getElementById("stat-duplicates-card").addEventListener("click", () => {
+    duplicatesOnly = !duplicatesOnly;
+    document.getElementById("stat-duplicates-card").title = duplicatesOnly
+        ? "Click to clear this filter"
+        : "Click to filter the table to just these";
+    refreshSupplierView();
+});
+
 async function loadSuppliers() {
     const [{ data, error }, { data: counts }] = await Promise.all([
         supabaseClient.from("supplier").select("*").order("name"),
@@ -228,7 +345,7 @@ async function loadSuppliers() {
     const countBySupplier = {};
     (counts || []).forEach(c => { countBySupplier[c.supplier_id] = c.product_count; });
     allSuppliers = (data || []).map(s => ({ ...s, product_count: countBySupplier[s.supplier_id] ?? 0 }));
-    supplierView.setRaw(allSuppliers);
+    refreshSupplierView();
     updateSupplierStats();
 }
 
@@ -242,7 +359,7 @@ async function toggleDetails(supplierId, supplierName) {
         return;
     }
     openDetailsId = supplierId;
-    supplierView.setRaw(allSuppliers); // re-render so the row-active highlight picks it up
+    refreshSupplierView(); // re-render so the row-active highlight picks it up
 
     document.getElementById("details-title").textContent = `${supplierName} — details`;
     document.getElementById("supplier-details-card").style.display = "block";
@@ -295,7 +412,7 @@ async function toggleDetails(supplierId, supplierName) {
 function closeDetails() {
     openDetailsId = null;
     document.getElementById("supplier-details-card").style.display = "none";
-    supplierView.setRaw(allSuppliers);
+    refreshSupplierView();
 }
 
 function startEdit(id) {
@@ -306,11 +423,11 @@ function startEdit(id) {
     document.getElementById("supplier-name").value = s.name;
     document.getElementById("supplier-phone").value = s.phone || "";
     document.getElementById("supplier-address").value = s.address || "";
-    updateNameHint();
+    document.getElementById("supplier-products-section").style.display = "none";
     document.getElementById("form-title").textContent = "Edit supplier";
     document.getElementById("supplier-submit").textContent = "Update supplier";
     document.getElementById("supplier-cancel").style.display = "inline-block";
-    supplierView.setRaw(allSuppliers); // re-render so the row picks up the highlight
+    refreshSupplierView(); // re-render so the row picks up the highlight
     window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -320,29 +437,13 @@ function resetForm() {
     document.getElementById("form-title").textContent = "Add supplier";
     document.getElementById("supplier-submit").textContent = "Add supplier";
     document.getElementById("supplier-cancel").style.display = "none";
+    document.getElementById("supplier-products-section").style.display = "";
+    resetSupplierProductRows();
     editingId = null;
-    updateNameHint();
-    supplierView.setRaw(allSuppliers); // FIX: clears the highlight immediately, without needing a full reload
+    refreshSupplierView(); // FIX: clears the highlight immediately, without needing a full reload
 }
 
 document.getElementById("supplier-cancel").addEventListener("click", resetForm);
-
-// Live character counter that doubles as an over-limit warning -- the
-// input's maxlength="150" already blocks normal typing past the DB's
-// VARCHAR(150) column, this is just visible feedback as you approach it.
-const nameInput = document.getElementById("supplier-name");
-const nameHint = document.getElementById("supplier-name-hint");
-function updateNameHint() {
-    const len = nameInput.value.length;
-    if (len > 150) {
-        nameHint.className = "field-error";
-        nameHint.textContent = `${len}/150 — name is too long (150 characters max).`;
-    } else {
-        nameHint.className = "field-hint";
-        nameHint.textContent = `${len}/150`;
-    }
-}
-nameInput.addEventListener("input", updateNameHint);
 
 document.getElementById("supplier-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -379,6 +480,17 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
         return;
     }
 
+    let products = [];
+    if (!id) {
+        try {
+            products = collectSupplierProducts();
+        } catch (err) {
+            statusDiv.textContent = err.message;
+            statusDiv.className = "status-msg status-error";
+            return;
+        }
+    }
+
     const duplicates = findPossibleDuplicates(payload.name, payload.phone, id);
     if (duplicates.length) {
         const lines = duplicates.map(d =>
@@ -396,20 +508,27 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
     // could fire the insert/update twice before the first one lands.
     submitBtn.disabled = true;
     try {
-        const { error } = id
-            ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
-            : await supabaseClient.from("supplier").insert(payload);
+        if (id) {
+            const { error } = await supabaseClient.from("supplier").update(payload).eq("supplier_id", id);
+            if (error) throw error;
+        } else {
+            const { data: supplier, error: supplierError } = await supabaseClient
+                .from("supplier")
+                .insert(payload)
+                .select("supplier_id")
+                .single();
+            if (supplierError) throw supplierError;
 
-        if (error) {
-            statusDiv.textContent = "Error: " + error.message;
-            statusDiv.className = "status-msg status-error";
-            return;
+            if (products.length) saveSupplierProductDrafts(supplier.supplier_id, products);
         }
 
-        statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
+        statusDiv.textContent = id ? "Supplier updated." : "Supplier added.";
         statusDiv.className = "status-msg status-ok";
         resetForm();
         loadSuppliers();
+    } catch (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
     } finally {
         submitBtn.disabled = false;
     }
@@ -417,9 +536,18 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
 
 // Translates the raw FK-violation Postgres text into something actionable,
 // naming the exact count of dependent products instead of a generic error.
-function friendlySupplierDeleteError(message, productCount) {
+// FIX: this used to always blame productCount, even when a supplier had
+// 0 current products but still had past purchase records blocking the
+// delete via a different FK -- the message would literally say "this
+// supplier still has 0 product(s) on file". Now it names whichever
+// dependent records actually exist, and never cites a zero count.
+function friendlySupplierDeleteError(message, productCount, purchaseCount) {
     if (message.includes("violates foreign key constraint")) {
-        return `Can't delete — this supplier still has ${productCount} product(s) and/or past purchases on file. Reassign or delete those first.`;
+        const parts = [];
+        if (productCount > 0) parts.push(`${productCount} product(s)`);
+        if (purchaseCount > 0) parts.push(`${purchaseCount} purchase record(s)`);
+        const detail = parts.length ? parts.join(" and ") : "related records";
+        return `Can't delete — this supplier still has ${detail} on file. Reassign or delete those first.`;
     }
     return "Could not delete: " + message;
 }
@@ -427,15 +555,28 @@ function friendlySupplierDeleteError(message, productCount) {
 async function deleteSupplier(id) {
     const supplier = allSuppliers.find(s => String(s.supplier_id) === String(id));
     const productCount = supplier?.product_count ?? 0;
-    const confirmMsg = productCount > 0
-        ? `This supplier has ${productCount} product(s) on file — deleting will fail unless those are reassigned or removed first. Delete anyway?`
-        : "Delete this supplier?";
+    // FIX: the pre-delete warning only ever checked productCount, so a
+    // supplier with 0 current products (all reassigned elsewhere) but
+    // real purchase history got no warning at all before a failed delete.
+    const { count: purchaseCount } = await supabaseClient
+        .from("purchase")
+        .select("purchase_id", { count: "exact", head: true })
+        .eq("supplier_id", id);
+
+    let confirmMsg = "Delete this supplier?";
+    if (productCount > 0 && purchaseCount > 0) {
+        confirmMsg = `This supplier has ${productCount} product(s) and ${purchaseCount} purchase record(s) on file — deleting will fail unless those are reassigned/removed first. Delete anyway?`;
+    } else if (productCount > 0) {
+        confirmMsg = `This supplier has ${productCount} product(s) on file — deleting will fail unless those are reassigned or removed first. Delete anyway?`;
+    } else if (purchaseCount > 0) {
+        confirmMsg = `This supplier has no current products, but has ${purchaseCount} past purchase record(s) on file — deleting will fail unless those are removed first. Delete anyway?`;
+    }
     if (!confirm(confirmMsg)) return;
 
     const { error } = await supabaseClient.from("supplier").delete().eq("supplier_id", id);
     const statusDiv = document.getElementById("supplier-status");
     if (error) {
-        statusDiv.textContent = friendlySupplierDeleteError(error.message, productCount);
+        statusDiv.textContent = friendlySupplierDeleteError(error.message, productCount, purchaseCount);
         statusDiv.className = "status-msg status-error";
         return;
     }
