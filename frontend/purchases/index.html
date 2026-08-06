@@ -20,10 +20,32 @@
 
         <main class="shell-content">
 
+            <section class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Purchases recorded</div>
+                    <div class="stat-value" id="stat-purchase-count">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Units purchased (all-time)</div>
+                    <div class="stat-value" id="stat-units">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Total spend (all-time)</div>
+                    <div class="stat-value accent" id="stat-spend">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Distinct products purchased</div>
+                    <div class="stat-value" id="stat-distinct-products">—</div>
+                </div>
+            </section>
+
             <div class="card full-width">
                 <h2>Purchase inventory</h2>
-                <!-- FIX: explains why there's no Edit/Delete here, unlike Suppliers/Products/Warehouse -->
-                <p class="card-subtitle">Purchases are a permanent record — there's no edit or delete, so double-check before you submit.</p>
+                <!-- FIX: deleting a purchase now safely reverses the stock it added
+                     (blocked if that stock's already been sold) -- see the Delete
+                     button in Purchase history below. There's still no Edit, since
+                     changing quantity/cost after the fact has no safe equivalent. -->
+                <p class="card-subtitle">Double-check before you submit — purchases can be deleted afterward (which reverses the stock added), but not edited.</p>
                 <!-- FIX: shown instead of a raw insert error when a supplier/warehouse/product doesn't exist yet -->
                 <div id="purchase-prereq-warning"></div>
                 <form id="purchase-form">
@@ -49,7 +71,7 @@
                         </div>
                         <div>
                             <label for="purchase-cost">Unit cost</label>
-                            <input type="number" id="purchase-cost" min="0" step="0.01" required>
+                            <input type="number" id="purchase-cost" class="no-spinner" min="0" step="1" required>
                         </div>
                     </div>
                     <button type="submit">Record purchase</button>
@@ -63,15 +85,32 @@
                      table of the group and previously had no way to filter it at all -->
                 <div class="toolbar">
                     <input type="text" id="purchase-search" class="search-input" placeholder="Search by supplier, warehouse or product…">
+                    <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                        <button type="button" class="btn-ghost btn-small range-btn" data-days="30">Last 30 days</button>
+                        <button type="button" class="btn-ghost btn-small range-btn" data-days="90">Last 90 days</button>
+                        <button type="button" class="btn-ghost btn-small range-btn" data-days="">All time</button>
+                    </div>
+                    <button type="button" class="btn-ghost btn-small" id="purchase-export">Export CSV</button>
                 </div>
+                <p class="field-hint">Search and date range only cover the purchases loaded so far — click "Load more" below to reach further back.</p>
                 <div class="table-responsive">
                     <table id="purchase-table">
                         <thead>
-                            <tr><th>Date</th><th>Supplier</th><th>Warehouse</th><th>Product</th><th>Qty</th><th>Unit cost</th><th>Total</th></tr>
+                            <tr>
+                                <th class="th-sort" data-key="purchase_date">Date</th>
+                                <th class="th-sort" data-key="supplier_name">Supplier</th>
+                                <th class="th-sort" data-key="warehouse_name">Warehouse</th>
+                                <th class="th-sort" data-key="product_name">Product</th>
+                                <th class="th-sort num" data-key="quantity">Qty</th>
+                                <th class="th-sort num" data-key="unit_cost">Unit cost</th>
+                                <th class="th-sort num" data-key="total_cost">Total</th>
+                                <th>Actions</th>
+                            </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
                 </div>
+                <button type="button" class="btn-ghost" id="purchase-load-more" style="margin-top:14px; display:none;">Load more</button>
             </div>
 
         </main>
@@ -83,8 +122,15 @@
 <script src="/js/supabaseClient.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
+<script src="/js/table-view.js"></script>
 <script>
 renderSidebar("purchases");
+
+// FIX: lets Inventory's low-stock "Reorder" link land here with the right
+// Supplier + Product already picked, e.g. /purchases/index.html?supplier=1&product=5
+const reorderParams = new URLSearchParams(window.location.search);
+const preselectSupplier = reorderParams.get("supplier");
+const preselectProduct = reorderParams.get("product");
 
 // FIX: all three dropdown sources kept together so guardrails and the
 // supplier->product cascade can be computed from one consistent snapshot.
@@ -104,7 +150,39 @@ async function loadDropdowns() {
     document.getElementById("purchase-warehouse").innerHTML =
         dropdownState.warehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
 
-    updateFormState();
+    const statusDiv = document.getElementById("purchase-status");
+
+    // FIX: previously, if the URL's product param belonged to a different
+    // supplier than the URL's supplier param, the product preselect
+    // silently no-op'd (checked against the unfiltered product list, but
+    // assigned into the by-then-filtered select) with zero visible
+    // feedback. Now: a product param is trusted as the real intent of a
+    // restock link ("restock THIS product"), and its own supplier_id wins
+    // over a stale/mismatched supplier param -- with a note explaining
+    // when that correction happened, and a clear error if the product
+    // param doesn't exist at all.
+    if (preselectProduct) {
+        const product = dropdownState.products.find(p => String(p.product_id) === preselectProduct);
+        if (!product) {
+            statusDiv.textContent = "The product this restock link points to no longer exists — pick one manually below.";
+            statusDiv.className = "status-msg status-error";
+            updateFormState();
+        } else {
+            document.getElementById("purchase-supplier").value = product.supplier_id;
+            updateFormState();
+            document.getElementById("purchase-product").value = preselectProduct;
+            const mismatched = preselectSupplier && String(preselectSupplier) !== String(product.supplier_id);
+            statusDiv.textContent = mismatched
+                ? `Supplier corrected to match "${product.name}" — check the quantity and cost, then submit.`
+                : "Pre-filled from a low-stock Restock link — check the quantity and cost, then submit.";
+            statusDiv.className = "status-msg status-ok";
+        }
+    } else if (preselectSupplier && dropdownState.suppliers.some(s => String(s.supplier_id) === preselectSupplier)) {
+        document.getElementById("purchase-supplier").value = preselectSupplier;
+        updateFormState();
+    } else {
+        updateFormState();
+    }
 }
 
 // FIX: single function that (a) blocks the whole form with a helpful
@@ -150,90 +228,270 @@ function updateFormState() {
 document.getElementById("purchase-supplier").addEventListener("change", updateFormState);
 
 let allPurchaseHistory = [];
-let purchaseQuery = "";
+let purchaseOffset = 0;
+let purchaseHasMore = true;
+let dateRangeDays = null; // null = all time
+const PURCHASE_PAGE_SIZE = 100;
 
-function renderPurchaseRows(rows) {
-    fillTable("purchase-table", rows, r => `
+function applyDateRangeFilter(rows) {
+    if (!dateRangeDays) return rows;
+    const cutoff = Date.now() - dateRangeDays * 24 * 60 * 60 * 1000;
+    return rows.filter(r => new Date(r.purchase_date).getTime() >= cutoff);
+}
+
+const purchaseView = createTableView({
+    tableId: "purchase-table",
+    searchId: "purchase-search",
+    exportId: "purchase-export",
+    colspan: 8,
+    searchFields: ["supplier_name", "warehouse_name", "product_name"],
+    emptyMsg: "No purchases recorded yet.",
+    noMatchMsg: "No purchases match that search/range.",
+    csvName: () => "purchases.csv",
+    csvHeaders: ["Date", "Supplier", "Warehouse", "Product", "Qty", "Unit cost", "Total"],
+    csvRow: r => [formatDate(r.purchase_date), r.supplier_name, r.warehouse_name, r.product_name, r.quantity, r.unit_cost, r.total_cost],
+    rowHtml: r => `
         <td>${formatDate(r.purchase_date)}</td>
         <td>${escapeHtml(r.supplier_name)}</td>
         <td>${escapeHtml(r.warehouse_name)}</td>
         <td>${escapeHtml(r.product_name)}</td>
-        <td>${r.quantity}</td>
-        <td>${formatMoney(r.unit_cost)}</td>
-        <td>${formatMoney(r.total_cost)}</td>
-    `, 7);
-}
-
-// FIX: same pattern as Suppliers/Products -- keeps the filter applied
-// across reloads instead of the search box going stale.
-function applyPurchaseFilter() {
-    if (!purchaseQuery) { renderPurchaseRows(allPurchaseHistory); return; }
-    renderPurchaseRows(allPurchaseHistory.filter(r =>
-        (r.supplier_name || "").toLowerCase().includes(purchaseQuery) ||
-        (r.warehouse_name || "").toLowerCase().includes(purchaseQuery) ||
-        (r.product_name || "").toLowerCase().includes(purchaseQuery)
-    ));
-}
-
-async function loadPurchaseHistory() {
-    const { data, error } = await supabaseClient.from("purchase_history").select("*").limit(50);
-    if (error) { console.error(error); return; }
-    allPurchaseHistory = data || [];
-    applyPurchaseFilter();
-}
-
-document.getElementById("purchase-search").addEventListener("input", (e) => {
-    purchaseQuery = e.target.value.trim().toLowerCase();
-    applyPurchaseFilter();
+        <td class="num">${r.quantity}</td>
+        <td class="num">${formatMoney(r.unit_cost)}</td>
+        <td class="num">${formatMoney(r.total_cost)}</td>
+        <td class="table-actions">
+            <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.purchase_id}">Delete</button>
+        </td>
+    `,
+    afterRender: () => {
+        document.querySelectorAll("#purchase-table .delete-btn").forEach(btn =>
+            btn.addEventListener("click", () => deletePurchase(btn.dataset.id)));
+    }
 });
+
+function refreshPurchaseView() {
+    purchaseView.setRaw(applyDateRangeFilter(allPurchaseHistory));
+}
+
+// Reuses the existing button:disabled styling as the "this is the current
+// selection" indicator, instead of introducing a new active-button visual.
+function setActiveRange(days) {
+    dateRangeDays = days;
+    document.querySelectorAll(".range-btn").forEach(btn => {
+        const btnDays = btn.dataset.days ? Number(btn.dataset.days) : null;
+        btn.disabled = (btnDays === days);
+    });
+    refreshPurchaseView();
+}
+document.querySelectorAll(".range-btn").forEach(btn => {
+    btn.addEventListener("click", () => setActiveRange(btn.dataset.days ? Number(btn.dataset.days) : null));
+});
+
+// FIX: wired to trg_reverse_inventory_on_purchase_delete -- deleting here
+// reverses the stock this purchase added, and is rejected by the database
+// (not silently allowed) if that stock has already been sold elsewhere.
+// FIX: the DB blocks this with a raw "violates check constraint
+// inventory_quantity_check" message -- translated here into something a
+// user can actually act on, without touching the trigger/schema itself.
+function friendlyDeleteError(message) {
+    if ((message || "").includes("inventory_quantity_check")) {
+        return "Can't delete this purchase: some of that stock has already been sold or moved elsewhere, so reversing it would take inventory below zero.";
+    }
+    return "Could not delete: " + message;
+}
+
+async function deletePurchase(id) {
+    if (!confirm("Delete this purchase? This reverses the stock it added, and will fail if that stock has already been sold.")) return;
+    const { error } = await supabaseClient.from("purchase").delete().eq("purchase_id", id);
+    const statusDiv = document.getElementById("purchase-status");
+    if (error) {
+        statusDiv.textContent = friendlyDeleteError(error.message);
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    statusDiv.textContent = "Purchase deleted — inventory reversed.";
+    statusDiv.className = "status-msg status-ok";
+    loadPurchaseHistory(true);
+    loadPurchaseStats();
+}
+
+// FIX: replaced the hard .limit(50) (which also had no explicit ORDER BY on
+// the outer query, relying on the view's internal ordering surviving an
+// unordered wrapper call -- Postgres doesn't guarantee that) with real
+// "Load more" pagination, so history isn't silently truncated once a
+// project accumulates more than 50 purchases.
+async function loadPurchaseHistory(reset) {
+    if (reset) {
+        purchaseOffset = 0;
+        purchaseHasMore = true;
+        allPurchaseHistory = [];
+    }
+    const loadMoreBtn = document.getElementById("purchase-load-more");
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.textContent = "Loading…";
+
+    const { data, error } = await supabaseClient
+        .from("purchase_history")
+        .select("*")
+        .order("purchase_date", { ascending: false })
+        .range(purchaseOffset, purchaseOffset + PURCHASE_PAGE_SIZE - 1);
+    if (error) { console.error(error); return; }
+
+    const rows = data || [];
+    allPurchaseHistory = allPurchaseHistory.concat(rows);
+    purchaseOffset += rows.length;
+    purchaseHasMore = rows.length === PURCHASE_PAGE_SIZE;
+
+    refreshPurchaseView();
+    loadMoreBtn.style.display = purchaseHasMore ? "inline-block" : "none";
+    loadMoreBtn.disabled = false;
+    loadMoreBtn.textContent = "Load more";
+}
+document.getElementById("purchase-load-more").addEventListener("click", () => loadPurchaseHistory(false));
+
+// Deliberate exception to "reuse what's already loaded": the visible
+// history table is paginated, so it can't be honestly summed for an
+// all-time total. One cheap query (two numeric columns, no join) covers
+// all four stat tiles instead of quietly under-reporting from page 1 only.
+async function loadPurchaseStats() {
+    const { data, error } = await supabaseClient.from("purchase_item").select("purchase_id, quantity, unit_cost, product_id");
+    if (error) { console.error(error); return; }
+    const rows = data || [];
+    const purchaseCount = new Set(rows.map(r => r.purchase_id)).size;
+    const totalUnits = rows.reduce((sum, r) => sum + r.quantity, 0);
+    const totalSpend = rows.reduce((sum, r) => sum + r.quantity * r.unit_cost, 0);
+    const distinctProducts = new Set(rows.map(r => r.product_id)).size;
+
+    animateCount(document.getElementById("stat-purchase-count"), purchaseCount);
+    animateCount(document.getElementById("stat-units"), totalUnits);
+    document.getElementById("stat-spend").textContent = formatMoney(totalSpend);
+    animateCount(document.getElementById("stat-distinct-products"), distinctProducts);
+}
+
+// Translates known raised conditions into plain language, mirroring
+// friendlyDeleteError() above -- covers stale-dropdown races (a product's
+// supplier changing in another tab after this page's dropdowns loaded) and
+// defense-in-depth behind the quantity/cost checks below.
+function friendlyPurchaseError(message) {
+    const msg = message || "";
+    if (msg.includes("belongs to supplier")) {
+        return "That product now belongs to a different supplier than shown here — reload the page and try again.";
+    }
+    if (msg.includes("violates check constraint") && (msg.includes("quantity") || msg.includes("unit_cost"))) {
+        return "Quantity and unit cost must be positive numbers.";
+    }
+    if (msg.includes("violates foreign key constraint")) {
+        return "The selected supplier, warehouse, or product no longer exists — refresh the page and try again.";
+    }
+    return "Error: " + msg;
+}
 
 document.getElementById("purchase-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const statusDiv = document.getElementById("purchase-status");
-    statusDiv.textContent = "Recording purchase…";
-    statusDiv.className = "status-msg";
+    const submitBtn = document.querySelector("#purchase-form button[type=submit]");
 
-    const warehouseId = parseInt(document.getElementById("purchase-warehouse").value);
-    const productId = parseInt(document.getElementById("purchase-product").value);
+    const supplierSelect = document.getElementById("purchase-supplier");
+    const warehouseSelect = document.getElementById("purchase-warehouse");
+    const productSelect = document.getElementById("purchase-product");
+    const warehouseId = parseInt(warehouseSelect.value);
+    const productId = parseInt(productSelect.value);
+    const unitCost = parseFloat(document.getElementById("purchase-cost").value);
 
-    const { data, error } = await supabaseClient.rpc("place_purchase_api", {
-        p_supplier_id: parseInt(document.getElementById("purchase-supplier").value),
-        p_warehouse_id: warehouseId,
-        p_product_id: productId,
-        p_quantity: parseInt(document.getElementById("purchase-quantity").value),
-        p_unit_cost: parseFloat(document.getElementById("purchase-cost").value)
-    });
-
-    if (error) {
-        statusDiv.textContent = "Error: " + error.message;
+    // FIX: read with Number(), not parseInt(), so a typed "2.5" is caught
+    // by the integer check below instead of being silently truncated to 2
+    // before validation ever sees it.
+    const quantity = Number(document.getElementById("purchase-quantity").value);
+    if (!Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity <= 0) {
+        statusDiv.textContent = "Quantity must be a whole number greater than zero.";
         statusDiv.className = "status-msg status-error";
         return;
     }
 
-    // FIX: previously the confirmation was a dead end ("inventory updated" --
-    // but updated to what?). Now it looks up the actual resulting stock level
-    // and links straight to Inventory, so the effect of the action is visible
-    // immediately instead of requiring a manual trip to another page.
-    const { data: stockRow } = await supabaseClient
-        .from("inventory")
-        .select("quantity, product:product_id(name), warehouse:warehouse_id(name)")
-        .eq("product_id", productId)
-        .eq("warehouse_id", warehouseId)
-        .maybeSingle();
+    // FIX: unit cost is always a whole number here too -- same rule as Product price.
+    if (!Number.isInteger(unitCost)) {
+        statusDiv.textContent = "Unit cost must be a whole number (no decimals).";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    if (unitCost < 0) {
+        statusDiv.textContent = "Unit cost can't be negative.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
 
-    const stockNote = stockRow
-        ? ` ${escapeHtml(stockRow.product?.name ?? "Product")} now has ${stockRow.quantity} units in ${escapeHtml(stockRow.warehouse?.name ?? "that warehouse")}.`
-        : "";
+    // FIX: the page's own subtitle already warns purchases "can be deleted
+    // afterward... but not edited" -- there was no actual review step
+    // confirming that at the moment of commitment. A native confirm()
+    // keeps this consistent with the rest of the app (no custom modal).
+    const supplierName = supplierSelect.options[supplierSelect.selectedIndex]?.text ?? "?";
+    const warehouseName = warehouseSelect.options[warehouseSelect.selectedIndex]?.text ?? "?";
+    const productName = productSelect.options[productSelect.selectedIndex]?.text ?? "?";
+    const total = quantity * unitCost;
+    const proceed = confirm(
+        `Record this purchase?\n\n` +
+        `Supplier:  ${supplierName}\n` +
+        `Warehouse: ${warehouseName}\n` +
+        `Product:   ${productName}\n` +
+        `Quantity:  ${quantity}\n` +
+        `Unit cost: ${formatMoney(unitCost)}\n` +
+        `Total:     ${formatMoney(total)}\n\n` +
+        `Purchases can be deleted afterward, but not edited -- double-check the numbers above.`
+    );
+    if (!proceed) return;
 
-    statusDiv.innerHTML = `Purchase #${data} recorded.${stockNote} <a href="/inventory/index.html">View Inventory &rarr;</a>`;
-    statusDiv.className = "status-msg status-ok";
-    document.getElementById("purchase-form").reset();
-    updateFormState();
-    loadPurchaseHistory();
+    statusDiv.textContent = "Recording purchase…";
+    statusDiv.className = "status-msg";
+
+    // FIX: without this, clicking Submit twice quickly (or a slow network)
+    // could record the same purchase twice before the first one lands.
+    submitBtn.disabled = true;
+    try {
+        const { data, error } = await supabaseClient.rpc("place_purchase_api", {
+            p_supplier_id: parseInt(supplierSelect.value),
+            p_warehouse_id: warehouseId,
+            p_product_id: productId,
+            p_quantity: quantity,
+            p_unit_cost: unitCost
+        });
+
+        if (error) {
+            statusDiv.textContent = friendlyPurchaseError(error.message);
+            statusDiv.className = "status-msg status-error";
+            return;
+        }
+
+        // FIX: previously the confirmation was a dead end ("inventory updated" --
+        // but updated to what?). Now it looks up the actual resulting stock level
+        // and links straight to Inventory, so the effect of the action is visible
+        // immediately instead of requiring a manual trip to another page.
+        const { data: stockRow } = await supabaseClient
+            .from("inventory")
+            .select("quantity, product:product_id(name), warehouse:warehouse_id(name)")
+            .eq("product_id", productId)
+            .eq("warehouse_id", warehouseId)
+            .maybeSingle();
+
+        const stockNote = stockRow
+            ? ` ${escapeHtml(stockRow.product?.name ?? "Product")} now has ${stockRow.quantity} units in ${escapeHtml(stockRow.warehouse?.name ?? "that warehouse")}.`
+            : "";
+
+        statusDiv.innerHTML = `Purchase #${data} recorded.${stockNote} <a href="/inventory/index.html">View Inventory &rarr;</a>`;
+        statusDiv.className = "status-msg status-ok";
+        document.getElementById("purchase-form").reset();
+        loadPurchaseHistory(true);
+        loadPurchaseStats();
+    } finally {
+        // FIX: re-derive the correct disabled state instead of blindly
+        // re-enabling -- updateFormState() already disables the button
+        // when the current supplier has no products, and that should win.
+        updateFormState();
+    }
 });
 
+setActiveRange(null); // default: all time, matching the page's previous unfiltered behavior
 loadDropdowns();
-loadPurchaseHistory();
+loadPurchaseHistory(true);
+loadPurchaseStats();
 </script>
 
 </body>

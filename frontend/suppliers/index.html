@@ -20,6 +20,25 @@
 
         <main class="shell-content">
 
+            <section class="stat-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Suppliers</div>
+                    <div class="stat-value" id="stat-total-suppliers">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Products supplied</div>
+                    <div class="stat-value" id="stat-total-products">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">No products on file</div>
+                    <div class="stat-value" id="stat-zero-products">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Possible duplicates</div>
+                    <div class="stat-value accent" id="stat-duplicates">—</div>
+                </div>
+            </section>
+
             <div class="card full-width">
                 <h2 id="form-title">Add supplier</h2>
                 <form id="supplier-form">
@@ -27,11 +46,13 @@
                     <div class="form-row two-col">
                         <div>
                             <label for="supplier-name">Name</label>
-                            <input type="text" id="supplier-name" required>
+                            <input type="text" id="supplier-name" required maxlength="150">
+                            <div class="field-hint" id="supplier-name-hint">0/150</div>
                         </div>
                         <div>
                             <label for="supplier-phone">Phone</label>
-                            <input type="text" id="supplier-phone">
+                            <input type="text" id="supplier-phone" maxlength="20">
+                            <div class="field-hint">Digits, spaces, +, -, ( ) only — optional.</div>
                         </div>
                     </div>
                     <label for="supplier-address">Address</label>
@@ -46,12 +67,53 @@
                 <h2>Suppliers</h2>
                 <div class="toolbar">
                     <input type="text" id="supplier-search" class="search-input" placeholder="Search suppliers…">
+                    <button type="button" class="btn-ghost btn-small" id="supplier-export">Export CSV</button>
                 </div>
                 <div class="table-responsive">
                     <table id="supplier-table">
                         <thead>
-                            <tr><th>Name</th><th>Phone</th><th>Address</th><th>Actions</th></tr>
+                            <tr>
+                                <th class="th-sort" data-key="name">Name</th>
+                                <th class="th-sort" data-key="phone">Phone</th>
+                                <th class="th-sort" data-key="address">Address</th>
+                                <th class="th-sort" data-key="product_count">Products</th>
+                                <th>Actions</th>
+                            </tr>
                         </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card full-width" id="supplier-details-card" style="display:none;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+                    <div>
+                        <h2 id="details-title">Details</h2>
+                        <p class="card-subtitle">Products on file, stock on hand, and all-time purchase totals for this supplier.</p>
+                    </div>
+                    <button type="button" class="btn-ghost btn-small" id="details-close">Close</button>
+                </div>
+                <section class="stat-grid" style="margin: 18px 0;">
+                    <div class="stat-card">
+                        <div class="stat-label">Products supplied</div>
+                        <div class="stat-value" id="det-products">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Purchases placed</div>
+                        <div class="stat-value" id="det-purchases">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Total spend (all-time)</div>
+                        <div class="stat-value accent" id="det-spend">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Last purchase</div>
+                        <div class="stat-value" id="det-last-purchase" style="font-size:19px;">—</div>
+                    </div>
+                </section>
+                <div class="table-responsive">
+                    <table id="supplier-products-table">
+                        <thead><tr><th>Name</th><th>Category</th><th>Price</th><th>Stock</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -66,52 +128,174 @@
 <script src="/js/supabaseClient.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
+<script src="/js/table-view.js"></script>
 <script>
 renderSidebar("suppliers");
 
 let allSuppliers = [];
-let currentQuery = "";     // FIX: remembered so a reload doesn't silently drop the active search
-let editingId = null;      // FIX: tracked so the row being edited can be highlighted in the table
+let editingId = null;         // FIX: tracked so the row being edited can be highlighted in the table
+let openDetailsId = null;     // tracked so the row whose details panel is open stays highlighted too
 
-function renderSupplierRows(rows) {
-    fillTable("supplier-table", rows, r => `
-        <td>${escapeHtml(r.name)}</td>
+// Name alone doesn't prove two suppliers are the same real-world entity
+// (common names repeat), so this is a soft warning the user can dismiss --
+// not a hard block. Same normalized name + same phone is flagged as the
+// strongest signal, but it's still just advisory.
+function normalizeSupplierName(name) {
+    return (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function findPossibleDuplicates(name, phone, excludeId) {
+    const normName = normalizeSupplierName(name);
+    const normPhone = (phone || "").replace(/\D/g, "");
+    return allSuppliers
+        .filter(s => String(s.supplier_id) !== String(excludeId) && normalizeSupplierName(s.name) === normName)
+        .map(s => ({ ...s, samePhone: !!normPhone && normPhone === (s.phone || "").replace(/\D/g, "") }));
+}
+
+// Same 0/critical/low badge convention Products/Warehouses already use, so
+// stock shown inside a supplier's details panel reads identically everywhere.
+function stockBadge(quantity) {
+    if (quantity === 0) return `<span class="badge badge-critical">Out of stock</span>`;
+    if (quantity < 10) return `<span class="badge badge-warning">${quantity} left</span>`;
+    return quantity;
+}
+
+function isValidPhone(phone) {
+    if (!phone) return true; // optional field
+    return /^[0-9+\-() ]{6,20}$/.test(phone);
+}
+
+const supplierView = createTableView({
+    tableId: "supplier-table",
+    searchId: "supplier-search",
+    exportId: "supplier-export",
+    colspan: 5,
+    searchFields: ["name", "phone", "address"],
+    emptyMsg: "No suppliers yet — add one above.",
+    noMatchMsg: "No suppliers match that search.",
+    csvName: () => "suppliers.csv",
+    csvHeaders: ["Name", "Phone", "Address", "Products"],
+    csvRow: r => [r.name, r.phone || "", r.address || "", r.product_count],
+    rowHtml: r => `
+        <td data-id="${r.supplier_id}">${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.phone) || "-"}</td>
         <td>${escapeHtml(r.address) || "-"}</td>
+        <td>${r.product_count ?? 0}${(r.product_count ?? 0) > 0
+            ? ` <button type="button" class="btn-ghost btn-small view-products-btn" data-id="${r.supplier_id}" data-name="${escapeHtml(r.name)}">Details</button>`
+            : ""}</td>
         <td class="table-actions">
             <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.supplier_id}">Edit</button>
             <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.supplier_id}">Delete</button>
         </td>
-    `, 4);
+    `,
+    afterRender: () => {
+        document.querySelectorAll("#supplier-table .edit-btn").forEach(btn =>
+            btn.addEventListener("click", () => startEdit(btn.dataset.id)));
+        document.querySelectorAll("#supplier-table .delete-btn").forEach(btn =>
+            btn.addEventListener("click", () => deleteSupplier(btn.dataset.id)));
+        document.querySelectorAll("#supplier-table .view-products-btn").forEach(btn =>
+            btn.addEventListener("click", () => toggleDetails(btn.dataset.id, btn.dataset.name)));
+        // FIX: highlight whichever row is being edited AND/OR has its
+        // details panel open -- both are "this row is the current focus" states.
+        document.querySelectorAll("#supplier-table tbody tr").forEach(tr => {
+            const id = tr.querySelector("[data-id]")?.dataset.id;
+            if (id != null && (String(id) === String(editingId) || String(id) === String(openDetailsId))) {
+                tr.classList.add("row-active");
+            }
+        });
+    }
+});
 
-    document.querySelectorAll(".edit-btn").forEach(btn => {
-        btn.addEventListener("click", () => startEdit(btn.dataset.id));
-        // FIX: highlight whichever row is currently being edited, so it's
-        // obvious which record the form up top refers to.
-        if (editingId !== null && String(btn.dataset.id) === String(editingId)) {
-            btn.closest("tr").style.background = "var(--accent-tint)";
-        }
-    });
-    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteSupplier(btn.dataset.id)));
-}
+function updateSupplierStats() {
+    const total = allSuppliers.length;
+    const totalProducts = allSuppliers.reduce((sum, s) => sum + (s.product_count ?? 0), 0);
+    const zeroProducts = allSuppliers.filter(s => (s.product_count ?? 0) === 0).length;
+    const duplicateCount = allSuppliers.filter(s =>
+        findPossibleDuplicates(s.name, s.phone, s.supplier_id).length > 0).length;
 
-// FIX: single source of truth for "what should the table show right now" --
-// re-used after every load AND every keystroke, so the search filter never
-// gets silently reset by an add/edit/delete.
-function applyFilter() {
-    if (!currentQuery) { renderSupplierRows(allSuppliers); return; }
-    renderSupplierRows(allSuppliers.filter(s =>
-        (s.name || "").toLowerCase().includes(currentQuery) ||
-        (s.phone || "").toLowerCase().includes(currentQuery) ||
-        (s.address || "").toLowerCase().includes(currentQuery)
-    ));
+    animateCount(document.getElementById("stat-total-suppliers"), total);
+    animateCount(document.getElementById("stat-total-products"), totalProducts);
+    animateCount(document.getElementById("stat-zero-products"), zeroProducts);
+    animateCount(document.getElementById("stat-duplicates"), duplicateCount);
 }
 
 async function loadSuppliers() {
-    const { data, error } = await supabaseClient.from("supplier").select("*").order("name");
+    const [{ data, error }, { data: counts }] = await Promise.all([
+        supabaseClient.from("supplier").select("*").order("name"),
+        supabaseClient.from("supplier_product_count").select("supplier_id, product_count")
+    ]);
     if (error) { console.error(error); return; }
-    allSuppliers = data || [];
-    applyFilter(); // FIX: was renderSupplierRows(allSuppliers) -- ignored any active search
+    const countBySupplier = {};
+    (counts || []).forEach(c => { countBySupplier[c.supplier_id] = c.product_count; });
+    allSuppliers = (data || []).map(s => ({ ...s, product_count: countBySupplier[s.supplier_id] ?? 0 }));
+    supplierView.setRaw(allSuppliers);
+    updateSupplierStats();
+}
+
+// FIX: same "expand a details table below" pattern Campaign Management uses
+// for "View links" -- now a fuller panel (products + stock + all-time
+// purchase totals) instead of just a bare product list. Clicking the same
+// supplier's button again collapses it.
+async function toggleDetails(supplierId, supplierName) {
+    if (String(openDetailsId) === String(supplierId)) {
+        closeDetails();
+        return;
+    }
+    openDetailsId = supplierId;
+    supplierView.setRaw(allSuppliers); // re-render so the row-active highlight picks it up
+
+    document.getElementById("details-title").textContent = `${supplierName} — details`;
+    document.getElementById("supplier-details-card").style.display = "block";
+    ["det-products", "det-purchases", "det-spend", "det-last-purchase"].forEach(id => {
+        document.getElementById(id).textContent = "…";
+    });
+    const tbody = document.querySelector("#supplier-products-table tbody");
+    if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="tbl-loading">Loading…</td></tr>`;
+    document.getElementById("supplier-details-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+    const [{ data: products, error: prodErr }, { data: inventory }] = await Promise.all([
+        supabaseClient.from("product").select("product_id, name, category, price").eq("supplier_id", supplierId).order("name"),
+        supabaseClient.from("inventory").select("product_id, quantity")
+    ]);
+    if (prodErr) { console.error(prodErr); return; }
+
+    const stockByProduct = {};
+    (inventory || []).forEach(i => { stockByProduct[i.product_id] = (stockByProduct[i.product_id] || 0) + i.quantity; });
+
+    fillTable("supplier-products-table", products, p => `
+        <td>${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.category) || "-"}</td>
+        <td>${formatMoney(p.price)}</td>
+        <td>${stockBadge(stockByProduct[p.product_id] ?? 0)}</td>
+    `, 4);
+    animateCount(document.getElementById("det-products"), (products || []).length);
+
+    // Purchase totals: query purchase/purchase_item directly by supplier_id
+    // rather than the purchase_history view, which only exposes a
+    // supplier NAME column (schema.sql:675-691) -- name-based lookups
+    // would risk collisions if two suppliers ever share a name.
+    const { data: purchases, error: purchErr } = await supabaseClient
+        .from("purchase")
+        .select("purchase_id, purchase_date, purchase_item(quantity, unit_cost)")
+        .eq("supplier_id", supplierId)
+        .order("purchase_date", { ascending: false });
+    if (purchErr) { console.error(purchErr); return; }
+
+    let totalSpend = 0;
+    (purchases || []).forEach(p => (p.purchase_item || []).forEach(item => {
+        totalSpend += item.quantity * item.unit_cost;
+    }));
+
+    animateCount(document.getElementById("det-purchases"), (purchases || []).length);
+    document.getElementById("det-spend").textContent = formatMoney(totalSpend);
+    document.getElementById("det-last-purchase").textContent =
+        purchases && purchases[0] ? formatDate(purchases[0].purchase_date) : "No purchases yet";
+}
+
+function closeDetails() {
+    openDetailsId = null;
+    document.getElementById("supplier-details-card").style.display = "none";
+    supplierView.setRaw(allSuppliers);
 }
 
 function startEdit(id) {
@@ -122,10 +306,11 @@ function startEdit(id) {
     document.getElementById("supplier-name").value = s.name;
     document.getElementById("supplier-phone").value = s.phone || "";
     document.getElementById("supplier-address").value = s.address || "";
+    updateNameHint();
     document.getElementById("form-title").textContent = "Edit supplier";
     document.getElementById("supplier-submit").textContent = "Update supplier";
     document.getElementById("supplier-cancel").style.display = "inline-block";
-    applyFilter(); // re-render so the row picks up the highlight
+    supplierView.setRaw(allSuppliers); // re-render so the row picks up the highlight
     window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -136,14 +321,33 @@ function resetForm() {
     document.getElementById("supplier-submit").textContent = "Add supplier";
     document.getElementById("supplier-cancel").style.display = "none";
     editingId = null;
-    applyFilter(); // FIX: clears the highlight immediately, without needing a full reload
+    updateNameHint();
+    supplierView.setRaw(allSuppliers); // FIX: clears the highlight immediately, without needing a full reload
 }
 
 document.getElementById("supplier-cancel").addEventListener("click", resetForm);
 
+// Live character counter that doubles as an over-limit warning -- the
+// input's maxlength="150" already blocks normal typing past the DB's
+// VARCHAR(150) column, this is just visible feedback as you approach it.
+const nameInput = document.getElementById("supplier-name");
+const nameHint = document.getElementById("supplier-name-hint");
+function updateNameHint() {
+    const len = nameInput.value.length;
+    if (len > 150) {
+        nameHint.className = "field-error";
+        nameHint.textContent = `${len}/150 — name is too long (150 characters max).`;
+    } else {
+        nameHint.className = "field-hint";
+        nameHint.textContent = `${len}/150`;
+    }
+}
+nameInput.addEventListener("input", updateNameHint);
+
 document.getElementById("supplier-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const statusDiv = document.getElementById("supplier-status");
+    const submitBtn = document.getElementById("supplier-submit");
     const id = document.getElementById("supplier-id").value;
     const payload = {
         name: document.getElementById("supplier-name").value.trim(),
@@ -160,40 +364,88 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
         return;
     }
 
-    const { error } = id
-        ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
-        : await supabaseClient.from("supplier").insert(payload);
-
-    if (error) {
-        statusDiv.textContent = "Error: " + error.message;
+    // Defense-in-depth behind the maxlength="150" attribute -- most
+    // browsers truncate pasted text to maxlength too, but this doesn't
+    // rely on that being universally true.
+    if (payload.name.length > 150) {
+        statusDiv.textContent = "Name is too long (150 characters max).";
         statusDiv.className = "status-msg status-error";
         return;
     }
 
-    statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
-    statusDiv.className = "status-msg status-ok";
-    resetForm();
-    loadSuppliers();
+    if (payload.phone && !isValidPhone(payload.phone)) {
+        statusDiv.textContent = "That doesn't look like a phone number — use digits, spaces, +, -, ( ) only.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    const duplicates = findPossibleDuplicates(payload.name, payload.phone, id);
+    if (duplicates.length) {
+        const lines = duplicates.map(d =>
+            `#${d.supplier_id} -- phone: ${d.phone || "none"}${d.samePhone ? " (same phone!)" : ""}, address: ${d.address || "none"}`
+        ).join("\n");
+        const proceed = confirm(
+            `A supplier named "${payload.name}" already exists:\n\n${lines}\n\n` +
+            `If this is the same supplier, click Cancel and edit that record instead.\n` +
+            `If it's a genuinely different supplier who happens to share a name, click OK to continue.`
+        );
+        if (!proceed) return;
+    }
+
+    // FIX: without this, clicking Submit twice quickly (or a slow network)
+    // could fire the insert/update twice before the first one lands.
+    submitBtn.disabled = true;
+    try {
+        const { error } = id
+            ? await supabaseClient.from("supplier").update(payload).eq("supplier_id", id)
+            : await supabaseClient.from("supplier").insert(payload);
+
+        if (error) {
+            statusDiv.textContent = "Error: " + error.message;
+            statusDiv.className = "status-msg status-error";
+            return;
+        }
+
+        statusDiv.textContent = id ? "Supplier updated." : "Supplier added — head to Product Management to add items for them.";
+        statusDiv.className = "status-msg status-ok";
+        resetForm();
+        loadSuppliers();
+    } finally {
+        submitBtn.disabled = false;
+    }
 });
 
+// Translates the raw FK-violation Postgres text into something actionable,
+// naming the exact count of dependent products instead of a generic error.
+function friendlySupplierDeleteError(message, productCount) {
+    if (message.includes("violates foreign key constraint")) {
+        return `Can't delete — this supplier still has ${productCount} product(s) and/or past purchases on file. Reassign or delete those first.`;
+    }
+    return "Could not delete: " + message;
+}
+
 async function deleteSupplier(id) {
-    if (!confirm("Delete this supplier? This will fail if products or purchases still reference it.")) return;
+    const supplier = allSuppliers.find(s => String(s.supplier_id) === String(id));
+    const productCount = supplier?.product_count ?? 0;
+    const confirmMsg = productCount > 0
+        ? `This supplier has ${productCount} product(s) on file — deleting will fail unless those are reassigned or removed first. Delete anyway?`
+        : "Delete this supplier?";
+    if (!confirm(confirmMsg)) return;
+
     const { error } = await supabaseClient.from("supplier").delete().eq("supplier_id", id);
     const statusDiv = document.getElementById("supplier-status");
     if (error) {
-        statusDiv.textContent = "Could not delete: " + error.message;
+        statusDiv.textContent = friendlySupplierDeleteError(error.message, productCount);
         statusDiv.className = "status-msg status-error";
         return;
     }
+    if (String(openDetailsId) === String(id)) closeDetails();
     statusDiv.textContent = "Supplier deleted.";
     statusDiv.className = "status-msg status-ok";
     loadSuppliers();
 }
 
-document.getElementById("supplier-search").addEventListener("input", (e) => {
-    currentQuery = e.target.value.trim().toLowerCase();
-    applyFilter();
-});
+document.getElementById("details-close").addEventListener("click", closeDetails);
 
 loadSuppliers();
 </script>
