@@ -31,6 +31,22 @@
 .flow-stage .stage-title { font-family: 'Outfit', sans-serif; font-size: 15px; font-weight: 600; margin-top: 10px; }
 .flow-stage .stage-metric { font-family: 'Outfit', sans-serif; font-size: 26px; font-weight: 700; line-height: 1.1; margin-top: 4px; }
 .flow-stage .stage-metric-label { font-size: 11.5px; color: var(--text-muted); }
+/* Second label line: what the on-hand total is made of. Dimmer than the
+   label above it so the box still reads metric -> unit -> composition. */
+.flow-stage .stage-breakdown { margin-top: 3px; font-size: 11px; opacity: 0.85; }
+/* Reconciliation strip under the pipeline: shows the identity that makes the
+   three stages add up to what is actually on hand. */
+.flow-balance {
+    margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center;
+    gap: 6px 10px; font-size: 12px; color: var(--text-secondary, #55586a);
+    font-variant-numeric: tabular-nums;
+}
+.flow-balance .term { display: inline-flex; align-items: baseline; gap: 5px; }
+.flow-balance .term b { font-weight: 700; }
+.flow-balance .op { color: var(--text-muted); font-weight: 700; }
+.flow-balance .eq { color: var(--text-muted); font-weight: 700; padding: 0 2px; }
+.flow-balance .unrecorded b { color: #b45309; }
+.flow-balance .result b { color: var(--accent-color); }
 
 .flow-arrow { width: 22px; height: 22px; color: var(--baseline); align-self: center; flex: 0 0 auto; }
 
@@ -60,6 +76,40 @@ td.num, th.num { text-align: right; }
 .just-opened { animation: flowFade 0.3s ease; }
 .tbl-loading { color: var(--text-muted); font-style: italic; }
 
+/* Six overview cards read better as 3x2 than 4+2 */
+@media (min-width: 700px) { .stat-grid { grid-template-columns: repeat(3, 1fr); } }
+.stat-card .stat-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+
+/* ---- Capacity meter ---- */
+.cap-cell { display: flex; flex-direction: column; gap: 5px; min-width: 150px; }
+.cap-meter {
+    height: 7px; border-radius: 999px; overflow: hidden;
+    background: rgba(11, 11, 11, 0.08);
+}
+.cap-meter-lg { height: 12px; margin: 4px 0 8px; }
+.cap-fill { display: block; height: 100%; border-radius: 999px; transition: width 0.5s ease, background 0.3s ease; }
+.cap-fill.cap-ok       { background: var(--status-good); }
+.cap-fill.cap-high     { background: var(--status-warning); }
+.cap-fill.cap-critical { background: var(--status-serious); }
+.cap-fill.cap-over     { background: var(--status-critical); }
+.cap-text { font-size: 11.5px; color: var(--text-muted); display: block; line-height: 1.4; }
+/* A value the database derives, shown where an input would otherwise sit --
+   styled to read as "computed", not as a field you failed to fill in. */
+.derived-field {
+    padding: 10px 12px;
+    border: 1px dashed var(--border, #d7d9e0);
+    border-radius: 8px;
+    background: rgba(11, 11, 11, 0.03);
+    color: var(--text-secondary, #55586a);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.cap-legend { font-size: 13px; color: var(--text-secondary); }
+.cap-legend strong { color: var(--text-primary); }
+
+
+.badge-chosen { background: color-mix(in srgb, var(--status-good) 15%, white); color: #0a7a0a; }
+
 @media (max-width: 720px) { .flow-arrow { display: none; } }
 </style>
 </head>
@@ -71,7 +121,6 @@ td.num, th.num { text-align: right; }
         <header class="shell-header">
             <div>
                 <h1>Warehouse</h1>
-                <p>Physical locations that hold inventory. Track stock value, move units between sites, and trace how stock flows in and out.</p>
             </div>
         </header>
 
@@ -92,8 +141,18 @@ td.num, th.num { text-align: right; }
                     <div class="stat-value" id="ov-units">—</div>
                 </div>
                 <div class="stat-card">
+                    <div class="stat-label">Capacity used</div>
+                    <div class="stat-value" id="ov-capacity">—</div>
+                    <div class="stat-sub" id="ov-capacity-sub"></div>
+                </div>
+                <div class="stat-card">
                     <div class="stat-label">Total stock value</div>
                     <div class="stat-value accent" id="ov-value">—</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Storage rent / day</div>
+                    <div class="stat-value" id="ov-rent">—</div>
+                    <div class="stat-sub" id="ov-rent-sub"></div>
                 </div>
             </section>
 
@@ -111,7 +170,22 @@ td.num, th.num { text-align: right; }
                             <input type="text" id="warehouse-location">
                         </div>
                     </div>
-                    <button type="submit" id="warehouse-submit">Add warehouse</button>
+                    <div class="form-row two-col" style="margin-top:16px;">
+                        <div>
+                            <label for="warehouse-capacity">Capacity (units)</label>
+                            <input type="number" id="warehouse-capacity" min="1" step="1" value="500" required>
+                        </div>
+                        <div>
+                            <label>Rent per unit per day (৳)</label>
+                            <!-- Not an input: rent_per_unit_day is a GENERATED column
+                                 derived from capacity, so the database sets it and
+                                 rejects any attempt to write it. Shown here so the
+                                 rule is visible while you type a capacity. -->
+                            <div class="derived-field" id="warehouse-rent-preview">—</div>
+                            <span class="cap-text" id="warehouse-rent-note">Set automatically from capacity</span>
+                        </div>
+                    </div>
+                    <button type="submit" id="warehouse-submit" style="margin-top:16px;">Add warehouse</button>
                     <button type="button" class="btn-ghost" id="warehouse-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
                 </form>
                 <div id="warehouse-status" class="status-msg"></div>
@@ -120,7 +194,6 @@ td.num, th.num { text-align: right; }
             <!-- Move stock between warehouses (writes to inventory only) -->
             <div class="card full-width">
                 <h2>Transfer stock</h2>
-                <p class="panel-note">Move units of a product from one warehouse to another. Both inventory rows are updated; total stock across the business is unchanged. The <code>inventory</code> audit trigger records both sides automatically.</p>
                 <form id="transfer-form">
                     <div class="form-row two-col">
                         <div>
@@ -140,11 +213,44 @@ td.num, th.num { text-align: right; }
                         <div>
                             <label for="transfer-to">To warehouse</label>
                             <select id="transfer-to" required></select>
+                            <span class="cap-text" id="transfer-to-space" style="margin-top:6px;"></span>
                         </div>
                     </div>
                     <button type="submit" id="transfer-submit">Transfer stock</button>
                 </form>
                 <div id="transfer-status" class="status-msg"></div>
+            </div>
+
+            <!-- Which hub would fulfil an order? Runs the real routing function. -->
+            <div class="card full-width">
+                <h2>Which hub ships an order?</h2>
+                <form id="routing-form">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="routing-product">Product</label>
+                            <select id="routing-product" required></select>
+                        </div>
+                        <div>
+                            <label for="routing-qty">Quantity</label>
+                            <input type="number" id="routing-qty" min="1" value="1" required>
+                        </div>
+                    </div>
+                    <button type="submit" id="routing-submit">Show source hub</button>
+                </form>
+                <div id="routing-status" class="status-msg"></div>
+                <div class="table-responsive">
+                    <table id="routing-table">
+                        <thead><tr>
+                            <th>Hub</th>
+                            <th class="num">On hand</th>
+                            <th class="num">Oldest stock</th>
+                            <th class="num" title="Extra units of rent per day this hub pays purely because its stock of this product is old. This is what the routing rule ranks on.">Surcharge</th>
+                            <th class="num">Utilisation</th>
+                            <th>Decision</th>
+                        </tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
             </div>
 
             <div class="card full-width">
@@ -158,8 +264,9 @@ td.num, th.num { text-align: right; }
                         <thead><tr>
                             <th class="th-sort" data-key="name">Name</th>
                             <th class="th-sort" data-key="location">Location</th>
-                            <th class="th-sort num" data-key="units">Units on hand</th>
+                            <th class="th-sort" data-key="utilisation_pct">Capacity used</th>
                             <th class="th-sort num" data-key="value">Stock value</th>
+                            <th class="th-sort num" data-key="total_daily_rent">Rent / day</th>
                             <th>Actions</th>
                         </tr></thead>
                         <tbody></tbody>
@@ -180,10 +287,35 @@ td.num, th.num { text-align: right; }
                     </div>
                 </div>
 
+                <!-- Capacity, rent and stock aging for this warehouse -->
+                <div class="card full-width">
+                    <h2>Capacity &amp; storage rent</h2>
+
+                    <div class="cap-meter cap-meter-lg"><span class="cap-fill" id="detail-cap-fill" style="width:0%"></span></div>
+                    <div class="cap-legend" id="detail-cap-text">—</div>
+
+                    <div class="toolbar" style="margin-top:22px;">
+                        <input type="text" id="age-search" class="search-input" placeholder="Search product…">
+                        <button type="button" class="btn-ghost btn-small" id="age-export">Export CSV</button>
+                    </div>
+                    <div class="table-responsive">
+                        <table id="stock-age-table">
+                            <thead><tr>
+                                <th class="th-sort" data-key="product">Product</th>
+                                <th class="th-sort" data-key="received">Received</th>
+                                <th class="th-sort num" data-key="units">Units</th>
+                                <th class="th-sort num" data-key="days">Days stored</th>
+                                <th class="th-sort num" data-key="multiplier">Rent rate</th>
+                                <th class="th-sort num" data-key="rent">Rent / day</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- Interactive pipeline: click a stage to see its records below -->
                 <div class="card full-width">
                     <h2>Stock flow</h2>
-                    <p class="panel-note">Follow this warehouse's stock left to right — select any stage to see the records behind it.</p>
                     <div class="flow-pipeline">
                         <button type="button" class="flow-stage" data-stage="in">
                             <span class="stage-head">
@@ -192,7 +324,7 @@ td.num, th.num { text-align: right; }
                             </span>
                             <span class="stage-title">Stock in</span>
                             <span class="stage-metric" id="metric-in">—</span>
-                            <span class="stage-metric-label">units received (all-time)</span>
+                            <span class="stage-metric-label">units purchased in (all-time)</span>
                         </button>
 
                         <svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -205,6 +337,7 @@ td.num, th.num { text-align: right; }
                             <span class="stage-title">On hand</span>
                             <span class="stage-metric" id="metric-onhand">—</span>
                             <span class="stage-metric-label">units stored now</span>
+                            <span class="stage-metric-label stage-breakdown" id="metric-onhand-breakdown"></span>
                         </button>
 
                         <svg class="flow-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
@@ -216,16 +349,23 @@ td.num, th.num { text-align: right; }
                             </span>
                             <span class="stage-title">Stock out</span>
                             <span class="stage-metric" id="metric-out">—</span>
-                            <span class="stage-metric-label">related orders</span>
+                            <span class="stage-metric-label" id="metric-out-label">units sold from here</span>
                         </button>
                     </div>
+
+                    <!-- The three stages above are each consistent with the table
+                         they open, but they do NOT add up on their own: units also
+                         arrive and leave by transfer, and older rows were written
+                         straight into `inventory` with nothing recording their
+                         arrival. This strip closes that gap explicitly rather than
+                         letting the pipeline look like arithmetic that fails. -->
+                    <div class="flow-balance" id="flow-balance"></div>
                 </div>
 
                 <!-- Panels -->
                 <div class="flow-panel" data-stage="in">
                     <div class="card full-width">
                         <h2>Stock received here</h2>
-                        <p class="panel-note">Every purchase delivered into this warehouse, tied accurately via <code>purchase.warehouse_id</code>. Each of these raised the on-hand quantities through the <code>increase_inventory</code> trigger.</p>
                         <div class="toolbar">
                             <input type="text" id="in-search" class="search-input" placeholder="Search supplier or product…">
                             <button type="button" class="btn-ghost btn-small" id="in-export">Export CSV</button>
@@ -249,7 +389,9 @@ td.num, th.num { text-align: right; }
                 <div class="flow-panel active" data-stage="onhand">
                     <div class="card full-width">
                         <h2>On hand now</h2>
-                        <p class="panel-note" id="onhand-summary">Live quantity of each product currently stored here.</p>
+                        <!-- Filled in by loadOnHand() with live counts. Starts empty so
+                             no placeholder prose flashes before the data lands. -->
+                        <p class="panel-note" id="onhand-summary"></p>
                         <div class="toolbar">
                             <input type="text" id="onhand-search" class="search-input" placeholder="Search product or category…">
                             <button type="button" class="btn-ghost btn-small" id="onhand-export">Export CSV</button>
@@ -271,8 +413,11 @@ td.num, th.num { text-align: right; }
 
                 <div class="flow-panel" data-stage="out">
                     <div class="card full-width">
-                        <h2>Stock leaving</h2>
-                        <p class="panel-note">Orders that include a product stocked here, with shipment status. The schema does not record which warehouse an order shipped from, so this is derived <em>through the products stocked here</em> — not a per-warehouse fulfillment record.</p>
+                        <h2>Shipped from here</h2>
+                        <!-- Only populated when some orders can't be attributed to a
+                             single hub -- that caveat changes how the table reads, so
+                             it stays. The explanation of how it works does not. -->
+                        <p class="panel-note" id="out-note"></p>
                         <div class="toolbar">
                             <input type="text" id="out-search" class="search-input" placeholder="Search customer or order #…">
                             <button type="button" class="btn-ghost btn-small" id="out-export">Export CSV</button>
@@ -283,7 +428,8 @@ td.num, th.num { text-align: right; }
                                     <th class="th-sort" data-key="order_id">Order</th>
                                     <th class="th-sort" data-key="customer">Customer</th>
                                     <th class="th-sort" data-key="date">Date</th>
-                                    <th class="th-sort num" data-key="units">Units (stocked here)</th>
+                                    <th class="th-sort num" data-key="units">Units</th>
+                                    <th class="th-sort" data-key="tracking">Tracking</th>
                                     <th class="th-sort" data-key="status">Shipment</th>
                                 </tr></thead>
                                 <tbody></tbody>
@@ -327,6 +473,30 @@ function animateCount(el, target) {
 
 function slug(s) {
     return (s || "warehouse").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "warehouse";
+}
+
+// ---- Capacity / rent presentation --------------------------------------
+// capacity_status comes straight from the warehouse_capacity view, so the
+// thresholds live in one place -- SQL -- and this only maps them onto colours.
+
+const CAPACITY_CLASS = { OK: "cap-ok", HIGH: "cap-high", CRITICAL: "cap-critical", OVER: "cap-over" };
+
+function capacityCell(r) {
+    const pct = Number(r.utilisation_pct) || 0;
+    const over = r.free_units < 0;
+    return `<div class="cap-cell">
+        <div class="cap-meter"><span class="cap-fill ${CAPACITY_CLASS[r.capacity_status] || "cap-ok"}" style="width:${Math.min(pct, 100)}%"></span></div>
+        <span class="cap-text">${r.used_units.toLocaleString()} / ${r.capacity_units.toLocaleString()} units &middot; ${pct}%${
+            over ? ` &middot; <strong>over by ${Math.abs(r.free_units).toLocaleString()}</strong>`
+                 : ` &middot; ${r.free_units.toLocaleString()} free`}</span>
+    </div>`;
+}
+
+function rentCell(r) {
+    const sur = Number(r.surcharge_daily_rent) || 0;
+    return `${formatMoney(r.total_daily_rent)}
+        <span class="cap-text">${formatMoney(r.rent_per_unit_day)}/unit/day${
+            sur > 0 ? ` &middot; +${formatMoney(sur)} aging` : ""}</span>`;
 }
 
 function csvCell(v) {
@@ -411,13 +581,14 @@ function createTableView(cfg) {
 
 const warehouseView = createTableView({
     tableId: "warehouse-table", searchId: "warehouse-search", exportId: "warehouse-export",
-    colspan: 5, searchFields: ["name", "location"],
+    colspan: 6, searchFields: ["name", "location"],
     emptyMsg: "No warehouses yet — add one above.",
     rowHtml: r => `
         <td>${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.location) || "-"}</td>
-        <td class="num">${r.units.toLocaleString()}</td>
+        <td>${capacityCell(r)}</td>
         <td class="num">${formatMoney(r.value)}</td>
+        <td class="num">${rentCell(r)}</td>
         <td class="table-actions">
             <button type="button" class="btn-small view-btn" data-id="${r.warehouse_id}">View flow</button>
             <button type="button" class="btn-ghost btn-small edit-btn" data-id="${r.warehouse_id}">Edit</button>
@@ -435,8 +606,29 @@ const warehouseView = createTableView({
         document.querySelectorAll(".delete-btn").forEach(b => b.addEventListener("click", () => deleteWarehouse(b.dataset.id)));
     },
     csvName: () => "warehouses.csv",
-    csvHeaders: ["Name", "Location", "Units on hand", "Stock value"],
-    csvRow: r => [r.name, r.location || "", r.units, r.value.toFixed(2)]
+    csvHeaders: ["Name", "Location", "Units on hand", "Capacity", "Free", "Utilisation %", "Capacity status",
+                 "Stock value", "Rent per unit/day", "Base rent/day", "Aging surcharge/day", "Total rent/day", "Total rent/month"],
+    csvRow: r => [r.name, r.location || "", r.used_units, r.capacity_units, r.free_units, r.utilisation_pct, r.capacity_status,
+                  r.value.toFixed(2), r.rent_per_unit_day.toFixed(2), r.base_daily_rent.toFixed(2),
+                  r.surcharge_daily_rent.toFixed(2), r.total_daily_rent.toFixed(2), r.total_monthly_rent.toFixed(2)]
+});
+
+// Lot-level stock aging for the open warehouse: which units have been sitting
+// how long, and what each lot costs per day at its aged rate.
+const stockAgeView = createTableView({
+    tableId: "stock-age-table", searchId: "age-search", exportId: "age-export",
+    colspan: 6, searchFields: ["product"],
+    emptyMsg: "No aged stock to show — nothing here traces back to a purchase in this warehouse.",
+    rowHtml: r => `
+        <td>${escapeHtml(r.product)}</td>
+        <td>${formatDate(r.received)}</td>
+        <td class="num">${r.units.toLocaleString()}</td>
+        <td class="num">${r.days.toLocaleString()}</td>
+        <td class="num">${r.multiplier.toFixed(1)}&times;</td>
+        <td class="num">${formatMoney(r.rent)}</td>`,
+    csvName: () => `${slug(selectedWarehouseName)}-stock-age.csv`,
+    csvHeaders: ["Product", "Received", "Units", "Days stored", "Rent multiplier", "Rent per day"],
+    csvRow: r => [r.product, formatDate(r.received), r.units, r.days, r.multiplier.toFixed(1), r.rent.toFixed(2)]
 });
 
 const onHandView = createTableView({
@@ -477,17 +669,18 @@ const stockInView = createTableView({
 
 const stockOutView = createTableView({
     tableId: "stock-out-table", searchId: "out-search", exportId: "out-export",
-    colspan: 5, searchFields: ["customer", "order_id"],
-    emptyMsg: "No orders involve a product stocked here yet.",
+    colspan: 6, searchFields: ["customer", "order_id"],
+    emptyMsg: "No orders have been fulfilled from this hub yet.",
     rowHtml: r => `
         <td>#${r.order_id}</td>
         <td>${escapeHtml(r.customer) || "-"}</td>
         <td>${formatDate(r.date)}</td>
         <td class="num">${r.units}</td>
+        <td>${r.tracking ? `<span class="code-badge">${escapeHtml(r.tracking)}</span>` : "-"}</td>
         <td>${statusBadge(r.status)}</td>`,
     csvName: () => `${slug(selectedWarehouseName)}-stock-out.csv`,
-    csvHeaders: ["Order", "Customer", "Date", "Units", "Shipment"],
-    csvRow: r => [r.order_id, r.customer || "", formatDate(r.date), r.units, r.status || "No shipment"]
+    csvHeaders: ["Order", "Customer", "Date", "Units", "Tracking", "Shipment"],
+    csvRow: r => [r.order_id, r.customer || "", formatDate(r.date), r.units, r.tracking || "", r.status || "No shipment"]
 });
 
 // ---- Pipeline stage switching -------------------------------------------
@@ -501,43 +694,94 @@ document.querySelectorAll(".flow-stage").forEach(s => s.addEventListener("click"
 // ---- Load warehouses + overview -----------------------------------------
 
 async function loadWarehouses() {
-    const { data, error } = await supabaseClient.from("warehouse").select("*").order("name");
+    // warehouse_overview is warehouse_capacity JOIN warehouse_rent, so one
+    // request brings back the raw columns plus every derived capacity and
+    // rent figure -- all the arithmetic stays in SQL.
+    const { data, error } = await supabaseClient.from("warehouse_overview").select("*");
     if (error) { console.error(error); return; }
-    allWarehouses = data || [];
 
-    // One inventory read powers per-warehouse units/value AND the overview.
+    // PostgreSQL NUMERIC can arrive as a string, so coerce once here and the
+    // rest of the page (sorting, totals, CSV) can treat these as numbers.
+    allWarehouses = (data || []).map(w => ({
+        ...w,
+        utilisation_pct:      Number(w.utilisation_pct) || 0,
+        rent_per_unit_day:    Number(w.rent_per_unit_day) || 0,
+        base_daily_rent:      Number(w.base_daily_rent) || 0,
+        surcharge_daily_rent: Number(w.surcharge_daily_rent) || 0,
+        total_daily_rent:     Number(w.total_daily_rent) || 0,
+        total_monthly_rent:   Number(w.total_monthly_rent) || 0
+    })).sort((a, b) => a.name.localeCompare(b.name));
+
+    // Stock VALUE still needs prices, which no view above carries.
     const { data: inv } = await supabaseClient
         .from("inventory")
         .select("warehouse_id, product_id, quantity, product:product_id(price)");
 
-    const unitsBy = {}, valueBy = {}, distinctProducts = new Set();
-    let totalUnits = 0, totalValue = 0;
+    const valueBy = {}, distinctProducts = new Set();
+    let totalValue = 0;
     (inv || []).forEach(r => {
         const price = Number(r.product?.price) || 0;
-        unitsBy[r.warehouse_id] = (unitsBy[r.warehouse_id] || 0) + r.quantity;
         valueBy[r.warehouse_id] = (valueBy[r.warehouse_id] || 0) + r.quantity * price;
         distinctProducts.add(r.product_id);
-        totalUnits += r.quantity;
         totalValue += r.quantity * price;
     });
+
+    const sum = key => allWarehouses.reduce((s, w) => s + (Number(w[key]) || 0), 0);
+    const totalUnits    = sum("used_units");
+    const totalCapacity = sum("capacity_units");
+    const totalRent     = sum("total_daily_rent");
+    const totalSurcharge = sum("surcharge_daily_rent");
+    const totalOverdue  = sum("overdue_units");
 
     animateCount(document.getElementById("ov-warehouses"), allWarehouses.length);
     animateCount(document.getElementById("ov-products"), distinctProducts.size);
     animateCount(document.getElementById("ov-units"), totalUnits);
     document.getElementById("ov-value").textContent = formatMoney(totalValue);
 
+    const overallPct = totalCapacity ? (totalUnits * 100 / totalCapacity) : 0;
+    document.getElementById("ov-capacity").textContent = overallPct.toFixed(1) + "%";
+    document.getElementById("ov-capacity-sub").textContent =
+        `${totalUnits.toLocaleString()} of ${totalCapacity.toLocaleString()} units across all hubs`;
+
+    document.getElementById("ov-rent").textContent = formatMoney(totalRent);
+    document.getElementById("ov-rent-sub").innerHTML = totalSurcharge > 0
+        ? `incl. <strong>${formatMoney(totalSurcharge)}</strong> aging surcharge on ${totalOverdue.toLocaleString()} unit${totalOverdue === 1 ? "" : "s"} over 30 days`
+        : "no aging surcharge — nothing has been sitting over 30 days";
+
     warehouseView.setRaw(allWarehouses.map(w => ({
-        warehouse_id: w.warehouse_id,
-        name: w.name,
-        location: w.location,
-        units: unitsBy[w.warehouse_id] || 0,
+        ...w,
         value: valueBy[w.warehouse_id] || 0
     })));
 
-    populateTransferSelects();
+    populateFormSelects();
 }
 
 // ---- Warehouse CRUD -----------------------------------------------------
+
+// Mirrors the GENERATED expression on warehouse.rent_per_unit_day. This copy is
+// for preview only -- the database is the authority and recomputes the stored
+// value itself, so a drift between the two can misinform but never mis-save.
+// Keep the bands here in step with the CASE in schema.sql if they ever change.
+function derivedRentRate(capacityUnits) {
+    if (!(capacityUnits > 0)) return null;
+    if (capacityUnits <= 200) return 3.00;
+    if (capacityUnits <= 500) return 2.50;
+    if (capacityUnits <= 1000) return 2.00;
+    return 1.50;
+}
+
+function updateRentPreview() {
+    const cap = parseInt(document.getElementById("warehouse-capacity").value);
+    const rate = derivedRentRate(cap);
+    document.getElementById("warehouse-rent-preview").textContent =
+        rate === null ? "—" : formatMoney(rate);
+    document.getElementById("warehouse-rent-note").textContent =
+        rate === null ? "Set automatically from capacity"
+                      : `${cap.toLocaleString()} units falls in the ${
+                            cap <= 200 ? "≤200" : cap <= 500 ? "≤500" : cap <= 1000 ? "≤1000" : ">1000"
+                        } band`;
+}
+document.getElementById("warehouse-capacity").addEventListener("input", updateRentPreview);
 
 function startEdit(id) {
     const w = allWarehouses.find(r => String(r.warehouse_id) === String(id));
@@ -545,6 +789,8 @@ function startEdit(id) {
     document.getElementById("warehouse-id").value = w.warehouse_id;
     document.getElementById("warehouse-name").value = w.name;
     document.getElementById("warehouse-location").value = w.location || "";
+    document.getElementById("warehouse-capacity").value = w.capacity_units;
+    updateRentPreview();
     document.getElementById("form-title").textContent = "Edit warehouse";
     document.getElementById("warehouse-submit").textContent = "Update warehouse";
     document.getElementById("warehouse-cancel").style.display = "inline-block";
@@ -554,6 +800,8 @@ function startEdit(id) {
 function resetForm() {
     document.getElementById("warehouse-form").reset();
     document.getElementById("warehouse-id").value = "";
+    document.getElementById("warehouse-capacity").value = 500;
+    updateRentPreview();
     document.getElementById("form-title").textContent = "Add warehouse";
     document.getElementById("warehouse-submit").textContent = "Add warehouse";
     document.getElementById("warehouse-cancel").style.display = "none";
@@ -564,16 +812,24 @@ document.getElementById("warehouse-form").addEventListener("submit", async (e) =
     e.preventDefault();
     const statusDiv = document.getElementById("warehouse-status");
     const id = document.getElementById("warehouse-id").value;
+    // rent_per_unit_day is deliberately absent: it is a GENERATED column, and
+    // Postgres rejects any INSERT or UPDATE that names it. Capacity is the only
+    // thing to send -- the rate follows from it.
     const payload = {
         name: document.getElementById("warehouse-name").value.trim(),
-        location: document.getElementById("warehouse-location").value.trim() || null
+        location: document.getElementById("warehouse-location").value.trim() || null,
+        capacity_units: parseInt(document.getElementById("warehouse-capacity").value)
     };
 
+    // Writes go to the base table, not warehouse_overview -- that view is
+    // read-only (it aggregates inventory).
     const { error } = id
         ? await supabaseClient.from("warehouse").update(payload).eq("warehouse_id", id)
         : await supabaseClient.from("warehouse").insert(payload);
 
     if (error) {
+        // trg_check_capacity_not_below_stock rejects shrinking a warehouse
+        // below what it already stores, and surfaces here.
         statusDiv.textContent = "Error: " + error.message;
         statusDiv.className = "status-msg status-error";
         return;
@@ -607,17 +863,31 @@ async function deleteWarehouse(id) {
 
 // ---- Transfer stock -----------------------------------------------------
 
-async function populateTransferSelects() {
+async function populateFormSelects() {
     const { data: products } = await supabaseClient.from("product").select("product_id, name").order("name");
-    const prodSel = document.getElementById("transfer-product");
-    prodSel.innerHTML = (products || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+    const productOptions = (products || []).map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+    document.getElementById("transfer-product").innerHTML = productOptions;
+    document.getElementById("routing-product").innerHTML = productOptions;
 
     const whOptions = allWarehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
     document.getElementById("transfer-from").innerHTML = whOptions;
     const toSel = document.getElementById("transfer-to");
     toSel.innerHTML = whOptions;
     if (allWarehouses.length > 1) toSel.selectedIndex = 1;  // default to a different warehouse
+    showDestinationSpace();
 }
+
+// Free space in the chosen destination, so the capacity limit is visible
+// before the user submits rather than only as a rejected transfer.
+function showDestinationSpace() {
+    const hint = document.getElementById("transfer-to-space");
+    const w = allWarehouses.find(x => String(x.warehouse_id) === document.getElementById("transfer-to").value);
+    if (!w) { hint.textContent = ""; return; }
+    hint.innerHTML = w.free_units > 0
+        ? `${w.free_units.toLocaleString()} of ${w.capacity_units.toLocaleString()} units free (${w.utilisation_pct}% full)`
+        : `<strong>Full</strong> — ${w.used_units.toLocaleString()} of ${w.capacity_units.toLocaleString()} units used. Nothing more can be moved in.`;
+}
+document.getElementById("transfer-to").addEventListener("change", showDestinationSpace);
 
 document.getElementById("transfer-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -632,43 +902,89 @@ document.getElementById("transfer-form").addEventListener("submit", async (e) =>
     if (fromId === toId) return fail("Pick two different warehouses.");
     if (!(qty > 0)) return fail("Quantity must be greater than zero.");
 
-    // Source must exist and hold enough of the product.
-    const { data: src } = await supabaseClient
-        .from("inventory").select("inventory_id, quantity")
-        .eq("warehouse_id", fromId).eq("product_id", productId).maybeSingle();
-    if (!src || src.quantity < qty) {
-        return fail(`Not enough stock in the source warehouse (has ${src ? src.quantity : 0}, need ${qty}).`);
+    // Free-space warning only. transfer_stock_api enforces this properly --
+    // free_units here comes from the last page load and may be stale.
+    const destWh = allWarehouses.find(w => w.warehouse_id === toId);
+    if (destWh && qty > destWh.free_units) {
+        return fail(`${destWh.name} only has ${Math.max(destWh.free_units, 0)} unit${destWh.free_units === 1 ? "" : "s"} of free space (capacity ${destWh.capacity_units}, ${destWh.used_units} used). Move stock out of it first, or pick another hub.`);
     }
 
-    // Deduct from source.
-    const { error: srcErr } = await supabaseClient
-        .from("inventory").update({ quantity: src.quantity - qty }).eq("inventory_id", src.inventory_id);
-    if (srcErr) return fail("Transfer failed on source: " + srcErr.message);
+    // One RPC, one transaction. Deducting the source and crediting the
+    // destination as two separate requests from here used to mean a rejected
+    // destination (a full hub) left the units already gone from the source,
+    // recoverable only by a best-effort undo that could itself fail.
+    // transfer_stock_api also records the move in stock_transfer, carrying each
+    // FIFO lot's receipt date across so the stock keeps its age.
+    const { error } = await supabaseClient.rpc("transfer_stock_api", {
+        p_product_id: productId,
+        p_from_warehouse_id: fromId,
+        p_to_warehouse_id: toId,
+        p_quantity: qty
+    });
 
-    // Add to destination (update existing row, or create it).
-    const { data: dest } = await supabaseClient
-        .from("inventory").select("inventory_id, quantity")
-        .eq("warehouse_id", toId).eq("product_id", productId).maybeSingle();
-
-    const { error: destErr } = dest
-        ? await supabaseClient.from("inventory").update({ quantity: dest.quantity + qty }).eq("inventory_id", dest.inventory_id)
-        : await supabaseClient.from("inventory").insert({ warehouse_id: toId, product_id: productId, quantity: qty });
-
-    if (destErr) {
-        // Best-effort rollback of the source deduction.
-        await supabaseClient.from("inventory").update({ quantity: src.quantity }).eq("inventory_id", src.inventory_id);
-        return fail("Transfer failed on destination (source restored): " + destErr.message);
-    }
+    if (error) return fail("Transfer failed — nothing was moved. " + error.message);
 
     const fromName = allWarehouses.find(w => w.warehouse_id === fromId)?.name || fromId;
     const toName = allWarehouses.find(w => w.warehouse_id === toId)?.name || toId;
-    statusDiv.textContent = `Moved ${qty} unit${qty === 1 ? "" : "s"} from ${fromName} to ${toName}.`;
+    statusDiv.textContent = `Moved ${qty} unit${qty === 1 ? "" : "s"} from ${fromName} to ${toName}. The stock keeps its original age.`;
     statusDiv.className = "status-msg status-ok";
 
     await loadWarehouses();
     if (selectedWarehouseId && [fromId, toId].includes(parseInt(selectedWarehouseId))) {
         await refreshOpenDetail();
     }
+});
+
+// ---- Hub routing preview ------------------------------------------------
+
+document.getElementById("routing-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("routing-status");
+    const productId = parseInt(document.getElementById("routing-product").value);
+    const qty = parseInt(document.getElementById("routing-qty").value);
+    const productName = document.getElementById("routing-product").selectedOptions[0]?.textContent || "this product";
+
+    const { data, error } = await supabaseClient.rpc("hub_routing_preview", {
+        p_product_id: productId,
+        p_quantity: qty
+    });
+
+    if (error) {
+        statusDiv.textContent = "Error: " + error.message;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    const rows = data || [];
+    const chosen = rows.find(r => r.is_chosen);
+
+    if (chosen) {
+        const surcharge = Number(chosen.surcharge_units) || 0;
+        statusDiv.className = "status-msg status-ok";
+        statusDiv.textContent =
+            `${qty} × ${productName} would ship from ${chosen.warehouse_name}` +
+            (surcharge > 0
+                ? ` — its stock of this product is the most surcharged of the hubs that can cover the whole line (${surcharge.toLocaleString()} extra units of rent a day, oldest lot ${chosen.oldest_days} day${chosen.oldest_days === 1 ? "" : "s"}). Shipping it clears that first.`
+                : ` — no candidate hub is paying an aging surcharge on it, so it went to the one with most to spare (${chosen.on_hand} units).`);
+    } else {
+        statusDiv.className = "status-msg status-error";
+        const total = rows.reduce((s, r) => s + r.on_hand, 0);
+        statusDiv.textContent = total === 0
+            ? `No hub holds any ${productName}. An order for it would be rejected by the reduce_inventory trigger.`
+            : `No single hub can cover ${qty} units on its own — ${total} exist but are split across hubs. Transfer stock into one hub first, or the order will be rejected.`;
+    }
+
+    fillTable("routing-table", rows, r => `
+        <td>${escapeHtml(r.warehouse_name)}</td>
+        <td class="num">${r.on_hand.toLocaleString()}</td>
+        <td class="num">${r.oldest_days.toLocaleString()} d</td>
+        <td class="num">${(Number(r.surcharge_units) || 0).toLocaleString()}</td>
+        <td class="num">${Number(r.utilisation_pct).toFixed(1)}%</td>
+        <td>${r.is_chosen
+                ? `<span class="badge badge-chosen">Ships from here</span>`
+                : r.can_fulfil
+                    ? `<span class="badge badge-neutral">Could fulfil</span>`
+                    : `<span class="badge badge-warning">Not enough stock</span>`}</td>`, 6);
 });
 
 // ---- Per-warehouse stock-flow view --------------------------------------
@@ -689,10 +1005,15 @@ async function viewWarehouse(id) {
     document.getElementById("detail-location").textContent = w.location || "No location set";
 
     ["metric-in", "metric-onhand", "metric-out"].forEach(mid => document.getElementById(mid).textContent = "…");
+    // Blank the balance and breakdown too, or the previous warehouse's figures
+    // sit there looking like they belong to this one until the fetches return.
+    document.getElementById("flow-balance").innerHTML = "";
+    document.getElementById("metric-onhand-breakdown").textContent = "";
     activateStage("onhand");
     onHandView.loading();
     stockInView.loading();
     stockOutView.loading();
+    stockAgeView.loading();
 
     // Re-highlight the open row in the list.
     document.querySelectorAll("#warehouse-table tbody tr.row-active").forEach(tr => tr.classList.remove("row-active"));
@@ -709,11 +1030,118 @@ async function viewWarehouse(id) {
     await refreshOpenDetail();
 }
 
+// Running totals for the reconciliation strip. Each loader below drops its own
+// figure in here; renderFlowBalance() reads them once they have all landed.
+const flowTotals = { onHand: 0, purchasesIn: 0, unitsOut: 0, transfersIn: 0, transfersOut: 0 };
+
 async function refreshOpenDetail() {
     if (!selectedWarehouseId) return;
-    const onHand = await loadOnHand(selectedWarehouseId);
+    await loadOnHand(selectedWarehouseId);
     await loadStockIn(selectedWarehouseId);
-    await loadStockOut(onHand.productIds);
+    await loadStockOut(selectedWarehouseId);
+    await loadTransferTotals(selectedWarehouseId);
+    await loadStockAge(selectedWarehouseId);
+    renderFlowBalance();
+}
+
+// Transfers are not shown as their own pipeline stage -- they would add a box
+// for something that is usually zero -- but they move real units in and out, so
+// the balance below cannot be right without them.
+async function loadTransferTotals(id) {
+    flowTotals.transfersIn = 0;
+    flowTotals.transfersOut = 0;
+
+    const [inRes, outRes] = await Promise.all([
+        supabaseClient.from("stock_transfer").select("quantity").eq("to_warehouse_id", id),
+        supabaseClient.from("stock_transfer").select("quantity").eq("from_warehouse_id", id)
+    ]);
+
+    // A project that has not run migration_add_stock_transfers.sql yet has no
+    // such table. Treat that as "no transfers" rather than breaking the panel.
+    if (inRes.error || outRes.error) return;
+
+    flowTotals.transfersIn  = (inRes.data  || []).reduce((s, r) => s + r.quantity, 0);
+    flowTotals.transfersOut = (outRes.data || []).reduce((s, r) => s + r.quantity, 0);
+}
+
+// on_hand = purchased in + transferred in - sold out - transferred out + unrecorded
+//
+// "Unrecorded" is whatever is left over: rows written straight into `inventory`
+// with no purchase or transfer behind them. It is shown rather than hidden --
+// it is the same stock that appears as "Unknown age" in the rent breakdown,
+// because with no arrival date there is nothing to age it from.
+function renderFlowBalance() {
+    const t = flowTotals;
+    const tracked = t.purchasesIn + t.transfersIn - t.unitsOut - t.transfersOut;
+    const unrecorded = t.onHand - tracked;
+
+    const term = (label, value, cls = "") =>
+        `<span class="term ${cls}"><b>${value.toLocaleString()}</b> ${label}</span>`;
+
+    const parts = [term("purchased in", t.purchasesIn)];
+    if (t.transfersIn)  parts.push(`<span class="op">+</span>`, term("transferred in", t.transfersIn));
+    parts.push(`<span class="op">−</span>`, term("sold", t.unitsOut));
+    if (t.transfersOut) parts.push(`<span class="op">−</span>`, term("transferred out", t.transfersOut));
+    if (unrecorded) {
+        parts.push(`<span class="op">${unrecorded > 0 ? "+" : "−"}</span>`,
+                   term("unrecorded", Math.abs(unrecorded), "unrecorded"));
+    }
+    parts.push(`<span class="eq">=</span>`, term("on hand", t.onHand, "result"));
+
+    document.getElementById("flow-balance").innerHTML = parts.join(" ");
+
+    // Composition of what is on the shelf, shown on the On hand box itself.
+    // Transferred-in only appears once there is some, so a project that never
+    // moves stock between hubs is not told about a number that is always zero.
+    const bits = [`${t.purchasesIn.toLocaleString()} purchased`];
+    if (t.transfersIn) bits.push(`${t.transfersIn.toLocaleString()} transferred in`);
+    if (unrecorded > 0) bits.push(`${unrecorded.toLocaleString()} unrecorded`);
+    document.getElementById("metric-onhand-breakdown").textContent = bits.join(" · ");
+}
+
+// CAPACITY + RENT + AGING: the capacity/rent figures come straight off the
+// warehouse_overview row already loaded; the lot table comes from
+// warehouse_stock_age, which reconstructs arrival dates from purchases and
+// transfers in.
+async function loadStockAge(id) {
+    const w = allWarehouses.find(x => String(x.warehouse_id) === String(id));
+    if (!w) return;
+
+    // ---- Capacity meter ----
+    const pct = w.utilisation_pct;
+    const fill = document.getElementById("detail-cap-fill");
+    fill.style.width = Math.min(pct, 100) + "%";
+    fill.className = "cap-fill " + (CAPACITY_CLASS[w.capacity_status] || "cap-ok");
+    document.getElementById("detail-cap-text").innerHTML =
+        `<strong>${w.used_units.toLocaleString()}</strong> of <strong>${w.capacity_units.toLocaleString()}</strong> units used (${pct}%) &middot; ` +
+        (w.free_units >= 0
+            ? `${w.free_units.toLocaleString()} free`
+            : `<strong>over capacity by ${Math.abs(w.free_units).toLocaleString()}</strong>`) +
+        ` &middot; status <strong>${w.capacity_status}</strong>`;
+
+    // The per-warehouse rent summary cards are gone; the per-lot table below
+    // carries the same figures at the level that explains them, and the
+    // whole-business totals still sit in the stat row at the top of the page.
+
+    // ---- Lot-level aging ----
+    const { data, error } = await supabaseClient
+        .from("warehouse_stock_age").select("*").eq("warehouse_id", id);
+    if (error) { console.error(error); return; }
+
+    // age_band is deliberately not read. The band names (Fresh/Aging/Stale/Dead
+    // stock) were a second way of saying what the multiplier already says --
+    // 1.0x / 1.5x / 2.0x / 3.0x -- and the rate is the thing that actually costs
+    // money. The thresholds still live in the database, in
+    // storage_age_multiplier(), which is what produces this multiplier.
+    const rows = (data || []).map(r => ({
+        product: r.product_name,
+        received: r.received_date,
+        units: r.units,
+        days: r.days_stored,
+        multiplier: Number(r.rent_multiplier) || 1,
+        rent: Number(r.daily_rent) || 0
+    }));
+    stockAgeView.setRaw(rows);
 }
 
 // STAGE 2: what's on hand now (accurate, warehouse-scoped)
@@ -723,7 +1151,7 @@ async function loadOnHand(id) {
         .select("quantity, product:product_id(product_id, name, category, price)")
         .eq("warehouse_id", id)
         .order("quantity", { ascending: true });
-    if (error) { console.error(error); return { productIds: [] }; }
+    if (error) { console.error(error); return; }
     const raw = data || [];
 
     const rows = raw.map(r => {
@@ -741,6 +1169,7 @@ async function loadOnHand(id) {
     const lowCount = rows.filter(r => r.quantity > 0 && r.quantity < 10).length;
     const outCount = rows.filter(r => r.quantity === 0).length;
 
+    flowTotals.onHand = totalUnits;
     animateCount(document.getElementById("metric-onhand"), totalUnits);
     document.getElementById("onhand-summary").innerHTML =
         `${rows.length} product${rows.length === 1 ? "" : "s"} stored` +
@@ -748,7 +1177,6 @@ async function loadOnHand(id) {
         ` &middot; <strong>${outCount}</strong> out of stock`;
 
     onHandView.setRaw(rows);
-    return { productIds: raw.map(r => r.product?.product_id).filter(Boolean) };
 }
 
 // STAGE 1: stock received here (accurate, via purchase.warehouse_id)
@@ -768,64 +1196,67 @@ async function loadStockIn(id) {
         });
     });
 
-    animateCount(document.getElementById("metric-in"), rows.reduce((s, r) => s + r.qty, 0));
+    flowTotals.purchasesIn = rows.reduce((s, r) => s + r.qty, 0);
+    animateCount(document.getElementById("metric-in"), flowTotals.purchasesIn);
     stockInView.setRaw(rows);
 }
 
-// STAGE 3: stock leaving (approximate — derived through stocked products)
-async function loadStockOut(productIds) {
-    if (!productIds.length) {
-        animateCount(document.getElementById("metric-out"), 0);
-        stockOutView.setRaw([]);
-        return;
-    }
-
-    const { data: items, error } = await supabaseClient
-        .from("order_item")
-        .select("order_id, quantity, product_id, order:order_id(order_id, order_date, customer:customer_id(name))")
-        .in("product_id", productIds);
+// STAGE 3: stock leaving — now an exact per-hub fulfilment list. reduce_inventory
+// records the sourcing hub on each shipment's 'Packed' status row, and
+// order_fulfilment reads it back, so this no longer has to be approximated
+// through "orders containing a product we happen to stock".
+async function loadStockOut(id) {
+    const { data, error } = await supabaseClient
+        .from("order_fulfilment").select("*")
+        .eq("source_warehouse_id", id)
+        .order("order_date", { ascending: false });
     if (error) { console.error(error); return; }
 
-    const byOrder = {};
-    (items || []).forEach(it => {
-        const oid = it.order_id;
-        if (!byOrder[oid]) byOrder[oid] = { order_id: oid, date: it.order?.order_date, customer: it.order?.customer?.name ?? "", units: 0, status: undefined };
-        byOrder[oid].units += it.quantity;
-    });
+    const rows = (data || []).map(r => ({
+        order_id: r.order_id,
+        customer: r.customer_name,
+        date: r.order_date,
+        units: r.units,
+        tracking: r.tracking_code,
+        status: r.shipment_status
+    }));
 
-    const orders = Object.values(byOrder).sort((a, b) => new Date(b.date) - new Date(a.date));
-    animateCount(document.getElementById("metric-out"), orders.length);
+    // Units, not order count -- the other two stages are units, and a pipeline
+    // that switches unit halfway through cannot be read as a flow. The order
+    // count moves to the label, where it is context rather than the headline.
+    //
+    // r.units is the whole order's quantity, which is correct here: an order
+    // split across hubs is stamped 'Multiple hubs', so its source_warehouse_id
+    // is NULL and it never appears in this list. Every row here came wholly
+    // from this one hub.
+    flowTotals.unitsOut = rows.reduce((s, r) => s + (r.units || 0), 0);
+    animateCount(document.getElementById("metric-out"), flowTotals.unitsOut);
+    document.getElementById("metric-out-label").textContent =
+        `units sold from here, across ${rows.length} order${rows.length === 1 ? "" : "s"}`;
+    stockOutView.setRaw(rows);
 
-    const statusByOrder = await latestStatusByOrder(orders.map(o => o.order_id));
-    orders.forEach(o => { o.status = statusByOrder[o.order_id]; });
-
-    stockOutView.setRaw(orders);
-}
-
-async function latestStatusByOrder(orderIds) {
-    if (!orderIds.length) return {};
-
-    const { data: shipments } = await supabaseClient
-        .from("shipment").select("shipment_id, order_id").in("order_id", orderIds);
-    const shipmentToOrder = {};
-    (shipments || []).forEach(s => { shipmentToOrder[s.shipment_id] = s.order_id; });
-
-    const shipmentIds = Object.keys(shipmentToOrder).map(Number);
-    if (!shipmentIds.length) return {};
-
-    const { data: statuses } = await supabaseClient
-        .from("shipment_status").select("shipment_id, status, updated_time")
-        .in("shipment_id", shipmentIds).order("updated_time", { ascending: false });
-
-    const latestByShipment = {};
-    (statuses || []).forEach(r => { if (!(r.shipment_id in latestByShipment)) latestByShipment[r.shipment_id] = r.status; });
-
-    const result = {};
-    Object.entries(latestByShipment).forEach(([sid, status]) => { result[shipmentToOrder[sid]] = status; });
-    return result;
+    // Two kinds of order belong to no single hub: those placed before the
+    // routing logic existed (source_hub NULL), and multi-item orders whose
+    // lines came from different hubs (marked 'Multiple hubs'). Both leave
+    // source_warehouse_id NULL, so one count covers them -- say so rather
+    // than letting them look like they never happened.
+    const { count } = await supabaseClient
+        .from("order_fulfilment").select("order_id", { count: "exact", head: true })
+        .is("source_warehouse_id", null);
+    // Say nothing unless there is something the table cannot show: orders that
+    // belong to no single hub are missing from EVERY warehouse's list, so their
+    // absence needs explaining. When the count is zero the list is complete and
+    // needs no note at all.
+    const note = document.getElementById("out-note");
+    note.innerHTML = count
+        ? `<strong>${count} order${count === 1 ? "" : "s"}</strong> are not attributed to a single hub — either placed before this logic existed, or split across hubs — so they appear under no warehouse.`
+        : "";
 }
 
 warehouseView.loading();
+// Seed the derived-rent preview from the capacity field's default value --
+// without this it reads "—" until the first keystroke, which looks broken.
+updateRentPreview();
 loadWarehouses();
 </script>
 
