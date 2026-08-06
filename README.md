@@ -126,6 +126,6 @@ Inventory should never "magically" increase — every unit of stock is traceable
 
 ## Team
 
-Procheta Silvie (230042154)
+Procheta Silvie (230042114)
 Tasnia Farzana  (230042124)
 Aksan Anan Ria  (230042154)
