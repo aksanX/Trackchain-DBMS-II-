@@ -386,6 +386,12 @@ header a.logo-link {
     border-radius: 18px;
     padding: 20px 22px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04);
+    transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.07);
 }
 
 .stat-card .stat-label {
@@ -532,8 +538,40 @@ tbody tr:last-child td {
 
 .table-actions {
     display: flex;
+    align-items: center;
     gap: 6px;
 }
+
+/* Reserves a fixed-width column for an action that only appears on some
+   rows (e.g. Restock), so Edit/Delete never shift left row to row. */
+.table-actions .restock-slot {
+    display: inline-block;
+    width: 74px;
+    flex-shrink: 0;
+}
+
+/* Sortable table headers -- promoted from the Warehouse page so every
+   table using the shared createTableView() engine gets the same
+   click-to-sort carets. */
+th.th-sort { cursor: pointer; user-select: none; white-space: nowrap; }
+th.th-sort:hover { color: var(--text-primary); }
+th.th-sort[data-dir="asc"]::after { content: " \25B2"; font-size: 9px; color: var(--accent-color); }
+th.th-sort[data-dir="desc"]::after { content: " \25BC"; font-size: 9px; color: var(--accent-color); }
+
+.tbl-loading { color: var(--text-muted); font-style: italic; }
+
+td.num, th.num { text-align: right; }
+
+/* Highlights the row whose detail/scorecard panel is currently open --
+   generalized from the Warehouse page's #warehouse-table-scoped version
+   so Suppliers/Products can reuse it too. */
+tbody tr.row-active td { background: var(--accent-tint); }
+tbody tr.row-active td:first-child { box-shadow: inset 3px 0 0 var(--accent-color); }
+
+/* Inline per-field hints/errors under form inputs (character counters,
+   validation messages) -- the one genuinely new visual pattern here. */
+.field-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.4; }
+.field-error { font-size: 12px; color: var(--error); margin-top: 6px; line-height: 1.4; }
 
 @keyframes rowHighlight {
     0%   { background: color-mix(in srgb, var(--accent-color) 18%, white); }
