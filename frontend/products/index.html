@@ -14,7 +14,6 @@
         <header class="shell-header">
             <div>
                 <h1>Product Management</h1>
-                <p>Every product belongs to exactly one supplier.</p>
             </div>
         </header>
 
@@ -38,7 +37,12 @@
                     <div class="stat-value" id="stat-low-stock">—</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">Catalog value on hand</div>
+                    <!-- FIX: this is price (selling) x stock, i.e. potential
+                         revenue if everything on hand sold at list price --
+                         NOT an accounting inventory valuation (which would
+                         value stock at cost, from purchase_item.unit_cost).
+                         Labeled honestly so it isn't mistaken for the latter. -->
+                    <div class="stat-label">Potential retail value on hand</div>
                     <div class="stat-value accent" id="stat-total-value">—</div>
                 </div>
             </section>
@@ -58,7 +62,6 @@
                             <label for="product-name">Name</label>
                             <input type="text" id="product-name" list="product-name-suggestions" required maxlength="150">
                             <datalist id="product-name-suggestions"></datalist>
-                            <div class="field-hint" id="product-name-hint">0/150</div>
                         </div>
                     </div>
                     <div class="form-row two-col">
@@ -66,13 +69,21 @@
                             <label for="product-category">Category</label>
                             <input type="text" id="product-category" list="product-category-suggestions" maxlength="80">
                             <datalist id="product-category-suggestions"></datalist>
-                            <div class="field-hint" id="product-category-hint">0/80</div>
-                        </div>
-                        <div>
-                            <label for="product-price">Price</label>
-                            <input type="number" id="product-price" class="no-spinner" min="0" step="1" required>
                         </div>
                     </div>
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="product-buying-price">Buying price</label>
+                            <input type="number" id="product-buying-price" class="no-spinner" min="0" step="1" required>
+                        </div>
+                        <div>
+                            <label for="product-margin">Profit margin %</label>
+                            <input type="number" id="product-margin" class="no-spinner" step="any" required>
+                        </div>
+                    </div>
+                    <label for="product-price">Selling price</label>
+                    <input type="number" id="product-price" class="no-spinner" min="0" step="1" required readonly>
+                    <div class="field-hint" id="margin-calc-hint"></div>
                     <button type="submit" id="product-submit">Add product</button>
                     <button type="button" class="btn-ghost" id="product-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
                 </form>
@@ -83,6 +94,7 @@
                 <h2>Products</h2>
                 <div class="toolbar">
                     <input type="text" id="product-search" class="search-input" placeholder="Search products…">
+                    <button type="button" class="btn-ghost btn-small" id="product-lowstock-filter">Low stock only</button>
                     <button type="button" class="btn-ghost btn-small" id="product-export">Export CSV</button>
                 </div>
                 <div class="table-responsive">
@@ -94,7 +106,7 @@
                                 <th class="th-sort" data-key="category">Category</th>
                                 <th class="th-sort num" data-key="price">Price</th>
                                 <th class="th-sort" data-key="totalStock">Stock</th>
-                                <th>Actions</th>
+                                <th style="text-align:center;">Actions</th>
                             </tr>
                         </thead>
                         <tbody></tbody>
@@ -124,7 +136,10 @@
                         <div class="stat-value" id="ph-last-purchase" style="font-size:19px;">—</div>
                     </div>
                 </section>
-                <p class="field-hint" id="ph-cost-drift" style="margin-bottom:14px;"></p>
+                <div class="field-hint" style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+                    <svg id="ph-sparkline" width="90" height="24" viewBox="0 0 90 24" style="flex-shrink:0;"></svg>
+                    <span id="ph-cost-drift"></span>
+                </div>
                 <div class="table-responsive">
                     <table id="product-history-table">
                         <thead><tr><th>Date</th><th>Supplier</th><th>Warehouse</th><th>Qty</th><th>Unit cost</th></tr></thead>
@@ -150,6 +165,30 @@ let allProducts = [];
 let allSuppliersForSelect = [];
 let editingId = null;       // FIX: tracked so the row being edited can be highlighted in the table
 let openHistoryId = null;   // tracked so the row whose purchase-history panel is open stays highlighted too
+const SUPPLIER_PRODUCT_DRAFTS_KEY = "trackchain:supplier-product-drafts";
+
+function getSupplierProductDrafts(supplierId) {
+    try {
+        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
+        return Array.isArray(drafts[supplierId]) ? drafts[supplierId] : [];
+    } catch (error) {
+        console.warn("Could not read supplier product suggestions", error);
+        return [];
+    }
+}
+
+function removeSupplierProductDraft(supplierId, productName) {
+    try {
+        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
+        if (!Array.isArray(drafts[supplierId])) return;
+        const normalized = normalizeProductName(productName);
+        drafts[supplierId] = drafts[supplierId].filter(product =>
+            normalizeProductName(product.name) !== normalized);
+        localStorage.setItem(SUPPLIER_PRODUCT_DRAFTS_KEY, JSON.stringify(drafts));
+    } catch (error) {
+        console.warn("Could not clear supplier product suggestion", error);
+    }
+}
 
 async function loadSupplierOptions() {
     const { data, error } = await supabaseClient.from("supplier").select("supplier_id, name").order("name");
@@ -192,6 +231,17 @@ function findDuplicateProduct(name, supplierId, excludeId) {
         String(p.product_id) !== String(excludeId) &&
         String(p.supplier_id) === String(supplierId) &&
         normalizeProductName(p.name) === normName);
+}
+
+// Same low/out-of-stock convention as stockBadge() -- lets the "Low stock
+// only" toolbar button narrow the table to exactly what stockBadge()
+// already flags, instead of making a Product Manager scroll and eyeball.
+let lowStockOnly = false;
+function applyStockFilter(rows) {
+    return lowStockOnly ? rows.filter(p => (p.totalStock ?? 0) < 10) : rows;
+}
+function refreshProductView() {
+    productView.setRaw(applyStockFilter(allProducts));
 }
 
 const productView = createTableView({
@@ -274,7 +324,7 @@ async function loadProducts() {
         totalStock: stockByProduct[p.product_id] ?? 0,
         supplier_name: p.supplier?.name ?? ""
     }));
-    productView.setRaw(allProducts);
+    refreshProductView();
     updateProductStats();
     refreshProductSuggestions();
 }
@@ -299,32 +349,44 @@ function setDatalistOptions(inputId, datalistId, values) {
 function refreshProductSuggestions() {
     const supplierId = document.getElementById("product-supplier").value;
     const ownProducts = allProducts.filter(p => String(p.supplier_id) === String(supplierId));
+    const catalogProducts = [...ownProducts, ...getSupplierProductDrafts(supplierId)];
 
     setDatalistOptions("product-name", "product-name-suggestions",
-        [...new Set(ownProducts.map(p => p.name).filter(Boolean))]);
+        [...new Set(catalogProducts.map(p => p.name).filter(Boolean))]);
     setDatalistOptions("product-category", "product-category-suggestions",
-        [...new Set(ownProducts.map(p => p.category).filter(Boolean))]);
+        [...new Set(catalogProducts.map(p => p.category).filter(Boolean))]);
 }
 
-// Live character counters that double as over-limit warnings -- the
-// inputs' maxlength attributes already block normal typing past the DB's
-// VARCHAR(150)/VARCHAR(80) columns, this is just visible feedback.
-function updateFieldHint(inputId, hintId, limit) {
-    const input = document.getElementById(inputId);
-    const hint = document.getElementById(hintId);
-    const len = input.value.length;
-    if (len > limit) {
+// Selling price is never typed directly -- Buying price + Profit margin %
+// are the only inputs; Price is read-only and always derived from them.
+// Selling price = Buying price + (Buying price x Margin% / 100).
+function recalcSellingPrice() {
+    const buyingRaw = document.getElementById("product-buying-price").value;
+    const marginRaw = document.getElementById("product-margin").value;
+    const hint = document.getElementById("margin-calc-hint");
+    const priceInput = document.getElementById("product-price");
+
+    const buying = parseFloat(buyingRaw);
+    const margin = parseFloat(marginRaw);
+    if (buyingRaw.trim() === "" || marginRaw.trim() === "" || !Number.isFinite(buying) || !Number.isFinite(margin)) {
+        priceInput.value = "";
+        hint.className = "field-hint";
+        hint.textContent = "";
+        return;
+    }
+
+    const selling = Math.round(buying + (buying * margin / 100));
+    priceInput.value = selling;
+    if (selling < 0) {
         hint.className = "field-error";
-        hint.textContent = `${len}/${limit} — too long (${limit} characters max).`;
+        hint.textContent = `Negative selling price (${formatMoney(selling)}) — increase the margin.`;
     } else {
         hint.className = "field-hint";
-        hint.textContent = `${len}/${limit}`;
+        hint.textContent = "";
     }
 }
-function updateNameHint() { updateFieldHint("product-name", "product-name-hint", 150); }
-function updateCategoryHint() { updateFieldHint("product-category", "product-category-hint", 80); }
-document.getElementById("product-name").addEventListener("input", updateNameHint);
-document.getElementById("product-category").addEventListener("input", updateCategoryHint);
+document.getElementById("product-buying-price").addEventListener("input", recalcSellingPrice);
+document.getElementById("product-margin").addEventListener("input", recalcSellingPrice);
 
 // FIX: the datalist only changes what's *suggested* while typing -- it
 // never clears a Name/Category that's already sitting in the box. So
@@ -341,8 +403,6 @@ document.getElementById("product-supplier").addEventListener("change", () => {
     if (editingId === null) {
         document.getElementById("product-name").value = "";
         document.getElementById("product-category").value = "";
-        updateNameHint();
-        updateCategoryHint();
     }
 });
 
@@ -373,11 +433,12 @@ reviveDatalistOnFocus("product-category");
 document.getElementById("product-name").addEventListener("input", (e) => {
     const supplierId = document.getElementById("product-supplier").value;
     const typed = normalizeProductName(e.target.value);
-    const match = allProducts.find(p =>
-        String(p.supplier_id) === String(supplierId) && normalizeProductName(p.name) === typed);
+    const match = [
+        ...allProducts.filter(p => String(p.supplier_id) === String(supplierId)),
+        ...getSupplierProductDrafts(supplierId)
+    ].find(p => normalizeProductName(p.name) === typed);
     if (match) {
         document.getElementById("product-category").value = match.category || "";
-        updateCategoryHint();
     }
 });
 
@@ -391,12 +452,13 @@ async function toggleHistory(productId, productName) {
         return;
     }
     openHistoryId = productId;
-    productView.setRaw(allProducts); // re-render so the row-active highlight picks it up
+    refreshProductView(); // re-render so the row-active highlight picks it up
 
     document.getElementById("history-title").textContent = `${productName} — purchase history`;
     document.getElementById("product-history-card").style.display = "block";
     ["ph-units", "ph-avg-cost", "ph-last-purchase"].forEach(id => document.getElementById(id).textContent = "…");
     document.getElementById("ph-cost-drift").textContent = "";
+    document.getElementById("ph-sparkline").innerHTML = "";
     const tbody = document.querySelector("#product-history-table tbody");
     if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="tbl-loading">Loading…</td></tr>`;
     document.getElementById("product-history-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -430,6 +492,7 @@ async function toggleHistory(productId, productName) {
         document.getElementById("ph-avg-cost").textContent = "—";
         document.getElementById("ph-last-purchase").textContent = "No purchases yet";
         document.getElementById("ph-cost-drift").textContent = "This product hasn't been purchased yet.";
+        renderSparkline("ph-sparkline", []);
         return;
     }
 
@@ -441,6 +504,8 @@ async function toggleHistory(productId, productName) {
     animateCount(document.getElementById("ph-units"), totalUnits);
     document.getElementById("ph-avg-cost").textContent = formatMoney(avgCost);
     document.getElementById("ph-last-purchase").textContent = formatDate(rows[0].date);
+    // rows are newest-first; the trend line reads left-to-right oldest-to-newest.
+    renderSparkline("ph-sparkline", [...rows].reverse().map(r => r.unit_cost));
 
     // A genuine real-world signal: is this supplier's price for this item drifting?
     if (minCost !== maxCost) {
@@ -453,12 +518,37 @@ async function toggleHistory(productId, productName) {
     }
 }
 
+// A tiny inline trend line so cost drift is visible at a glance, not just
+// readable in the sentence next to it -- no charting library needed.
+function renderSparkline(svgId, values) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    if (values.length < 2) { svg.innerHTML = ""; return; }
+
+    const w = 90, h = 24, pad = 2;
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = max - min || 1;
+    const stepX = (w - pad * 2) / (values.length - 1);
+    const points = values.map((v, i) => {
+        const x = pad + i * stepX;
+        const y = h - pad - ((v - min) / range) * (h - pad * 2);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    svg.innerHTML = `<polyline points="${points}" fill="none" stroke="var(--accent-color)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
 function closeHistory() {
     openHistoryId = null;
     document.getElementById("product-history-card").style.display = "none";
-    productView.setRaw(allProducts);
+    refreshProductView();
 }
 document.getElementById("history-close").addEventListener("click", closeHistory);
+
+document.getElementById("product-lowstock-filter").addEventListener("click", (e) => {
+    lowStockOnly = !lowStockOnly;
+    e.target.textContent = lowStockOnly ? "Show all products" : "Low stock only";
+    refreshProductView();
+});
 
 function startEdit(id) {
     const p = allProducts.find(r => String(r.product_id) === String(id));
@@ -472,14 +562,20 @@ function startEdit(id) {
     document.getElementById("product-supplier").value = p.supplier_id;
     document.getElementById("product-name").value = p.name;
     document.getElementById("product-category").value = p.category || "";
+    // Buying price/margin aren't stored anywhere, so there's nothing to
+    // restore here -- Price shows the saved value for reference, but
+    // saving this edit still requires re-entering buying price + margin
+    // (Price is never editable directly, even while editing).
+    document.getElementById("product-buying-price").value = "";
+    document.getElementById("product-margin").value = "";
     document.getElementById("product-price").value = p.price;
-    updateNameHint();
-    updateCategoryHint();
+    document.getElementById("margin-calc-hint").className = "field-hint";
+    document.getElementById("margin-calc-hint").textContent = "";
     refreshProductSuggestions();
     document.getElementById("form-title").textContent = "Edit product";
     document.getElementById("product-submit").textContent = "Update product";
     document.getElementById("product-cancel").style.display = "inline-block";
-    productView.setRaw(allProducts);
+    refreshProductView();
     window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -490,9 +586,9 @@ function resetForm() {
     document.getElementById("product-submit").textContent = "Add product";
     document.getElementById("product-cancel").style.display = "none";
     editingId = null;
-    updateNameHint();
-    updateCategoryHint();
-    productView.setRaw(allProducts);
+    document.getElementById("margin-calc-hint").className = "field-hint";
+    document.getElementById("margin-calc-hint").textContent = "";
+    refreshProductView();
 }
 
 document.getElementById("product-cancel").addEventListener("click", resetForm);
@@ -502,13 +598,10 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
     const statusDiv = document.getElementById("product-status");
     const submitBtn = document.getElementById("product-submit");
     const id = document.getElementById("product-id").value;
-    const priceRaw = document.getElementById("product-price").value;
-    const price = parseFloat(priceRaw);
     const payload = {
         supplier_id: parseInt(document.getElementById("product-supplier").value),
         name: document.getElementById("product-name").value.trim(),
-        category: document.getElementById("product-category").value.trim() || null,
-        price
+        category: document.getElementById("product-category").value.trim() || null
     };
 
     // FIX: the "required" attribute only blocks a literally-empty field --
@@ -530,21 +623,36 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
         return;
     }
 
-    // FIX: split into three distinct messages instead of one blanket
-    // "must be a whole number" for every kind of bad input -- a blank
-    // price and a negative price are different mistakes.
-    if (priceRaw.trim() === "" || Number.isNaN(price)) {
-        statusDiv.textContent = "Price is required.";
+    // Price is never entered directly -- Buying price and Profit margin %
+    // are required every time a product is saved (add OR edit), and the
+    // selling price is always recomputed from them right here, rather
+    // than trusted from the read-only field (which should already match,
+    // but this is the authoritative calculation, not just a UI mirror).
+    const buyingPriceRaw = document.getElementById("product-buying-price").value;
+    const marginRaw = document.getElementById("product-margin").value;
+    const buyingPrice = parseFloat(buyingPriceRaw);
+    const margin = parseFloat(marginRaw);
+
+    if (buyingPriceRaw.trim() === "" || Number.isNaN(buyingPrice)) {
+        statusDiv.textContent = "Buying price is required.";
         statusDiv.className = "status-msg status-error";
         return;
     }
-    if (!Number.isInteger(price)) {
-        statusDiv.textContent = "Price must be a whole number (no decimals).";
+    if (buyingPrice < 0) {
+        statusDiv.textContent = "Buying price can't be negative.";
         statusDiv.className = "status-msg status-error";
         return;
     }
-    if (price < 0) {
-        statusDiv.textContent = "Price can't be negative.";
+    if (marginRaw.trim() === "" || Number.isNaN(margin)) {
+        statusDiv.textContent = "Profit margin is required.";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    payload.price = Math.round(buyingPrice + (buyingPrice * margin / 100));
+    document.getElementById("product-price").value = payload.price;
+    if (payload.price < 0) {
+        statusDiv.textContent = "This buying price and margin produce a negative selling price — increase the margin.";
         statusDiv.className = "status-msg status-error";
         return;
     }
@@ -601,8 +709,9 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
             return;
         }
 
-        statusDiv.textContent = id ? "Product updated." : "Product added — you can now buy/sell it or record purchases for it.";
+        statusDiv.textContent = id ? "Product updated." : "Product added.";
         statusDiv.className = "status-msg status-ok";
+        if (!id) removeSupplierProductDraft(payload.supplier_id, payload.name);
         resetForm();
         loadProducts();
     } finally {

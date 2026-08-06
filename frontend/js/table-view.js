@@ -78,7 +78,18 @@ function createTableView(cfg) {
 
     if (cfg.searchId) {
         const inp = document.getElementById(cfg.searchId);
-        if (inp) inp.addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); apply(); });
+        // FIX: re-filtering on every single keystroke is harmless at small
+        // table sizes, but a 150ms debounce keeps typing smooth once a
+        // table (e.g. purchase history) grows into the hundreds of rows.
+        let debounceTimer = null;
+        if (inp) inp.addEventListener("input", e => {
+            const value = e.target.value;
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                state.q = value.trim().toLowerCase();
+                apply();
+            }, 150);
+        });
     }
 
     const ths = document.querySelectorAll(`#${cfg.tableId} thead th[data-key]`);
