@@ -60,15 +60,13 @@
                         </div>
                         <div>
                             <label for="product-name">Name</label>
-                            <input type="text" id="product-name" list="product-name-suggestions" required maxlength="150">
-                            <datalist id="product-name-suggestions"></datalist>
+                            <select id="product-name" required></select>
                         </div>
                     </div>
                     <div class="form-row two-col">
                         <div>
                             <label for="product-category">Category</label>
-                            <input type="text" id="product-category" list="product-category-suggestions" maxlength="80">
-                            <datalist id="product-category-suggestions"></datalist>
+                            <select id="product-category"></select>
                         </div>
                     </div>
                     <div class="form-row two-col">
@@ -196,7 +194,7 @@ async function loadSupplierOptions() {
     allSuppliersForSelect = data || [];
     const select = document.getElementById("product-supplier");
     select.innerHTML = allSuppliersForSelect.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
-    refreshProductSuggestions();
+    refreshProductOptions();
 
     // FIX: without a supplier to pick, submitting used to send parseInt(undefined)
     // -> NaN straight to Supabase and surface a confusing raw error. Now we
@@ -326,36 +324,51 @@ async function loadProducts() {
     }));
     refreshProductView();
     updateProductStats();
-    refreshProductSuggestions();
+    refreshProductOptions();
 }
 
 // FIX: the whole point of picking a Supplier first is that this supplier
-// already has a catalog -- so once they're chosen, suggest that supplier's
-// own product names/categories instead of leaving Name/Category blank
-// free-text fields with no memory of what's already on file for them.
-// FIX: some browsers (Chrome included) don't reliably re-read a <datalist>'s
-// options after the input has already been associated with it once --
-// swapping the supplier updated the <option> elements here just fine, but
-// the input kept showing whichever list it first bound to. Detaching and
-// reattaching the "list" attribute forces a fresh rebind every time.
-function setDatalistOptions(inputId, datalistId, values) {
-    const input = document.getElementById(inputId);
-    const datalist = document.getElementById(datalistId);
-    input.removeAttribute("list");
-    datalist.innerHTML = values.map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
-    input.setAttribute("list", datalistId);
+// already has a catalog -- so once they're chosen, Name/Category become real
+// dropdowns of that supplier's own products (existing + drafted on the
+// Supplier page), same pattern as the Supplier dropdown itself, instead of
+// free-text fields with no memory of what's already on file for them. A new
+// product's name+category is defined once, on the Supplier page's draft
+// list -- this page only ever picks from what's already on file there.
+function populateProductSelect(selectId, values) {
+    const select = document.getElementById(selectId);
+    const current = select.value;
+    select.innerHTML = `<option value="">— Select —</option>`
+        + values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
+    if (current && [...select.options].some(o => o.value === current)) select.value = current;
 }
 
-function refreshProductSuggestions() {
+function refreshProductOptions() {
     const supplierId = document.getElementById("product-supplier").value;
     const ownProducts = allProducts.filter(p => String(p.supplier_id) === String(supplierId));
     const catalogProducts = [...ownProducts, ...getSupplierProductDrafts(supplierId)];
 
-    setDatalistOptions("product-name", "product-name-suggestions",
-        [...new Set(catalogProducts.map(p => p.name).filter(Boolean))]);
-    setDatalistOptions("product-category", "product-category-suggestions",
-        [...new Set(catalogProducts.map(p => p.category).filter(Boolean))]);
+    populateProductSelect("product-name",
+        [...new Set(catalogProducts.map(p => p.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+    populateProductSelect("product-category",
+        [...new Set(catalogProducts.map(p => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
 }
+
+document.getElementById("product-name").addEventListener("change", () => {
+    const select = document.getElementById("product-name");
+    const categorySelect = document.getElementById("product-category");
+    if (!select.value) { categorySelect.value = ""; return; }
+
+    // FIX: picking a name that matches one of this supplier's existing
+    // products or drafts auto-selects the category it's already filed
+    // under, so category stays consistent instead of drifting per entry.
+    const supplierId = document.getElementById("product-supplier").value;
+    const typed = normalizeProductName(select.value);
+    const match = [
+        ...allProducts.filter(p => String(p.supplier_id) === String(supplierId)),
+        ...getSupplierProductDrafts(supplierId)
+    ].find(p => normalizeProductName(p.name) === typed);
+    categorySelect.value = match?.category || "";
+});
 
 // Selling price is never typed directly -- Buying price + Profit margin %
 // are the only inputs; Price is read-only and always derived from them.
@@ -388,57 +401,16 @@ function recalcSellingPrice() {
 document.getElementById("product-buying-price").addEventListener("input", recalcSellingPrice);
 document.getElementById("product-margin").addEventListener("input", recalcSellingPrice);
 
-// FIX: the datalist only changes what's *suggested* while typing -- it
-// never clears a Name/Category that's already sitting in the box. So
-// switching supplier after already typing/picking a name (e.g. "Gree AC",
-// which belongs to a different supplier) left the mismatched pair in place
-// and let it be saved under the wrong supplier with no warning. Since
-// Name/Category only make sense in the context of whichever supplier is
-// selected, a real supplier switch during "Add product" now starts those
-// two fields fresh. (Not applied while editing -- startEdit sets the
-// supplier itself via .value, which doesn't fire "change", so this never
-// fights with the row actually being edited.)
+// FIX: the options only make sense in the context of whichever supplier is
+// selected, so a real supplier switch during "Add product" starts Name/
+// Category fresh. (Not applied while editing -- startEdit sets the supplier
+// itself via .value, which doesn't fire "change", so this never fights with
+// the row actually being edited.)
 document.getElementById("product-supplier").addEventListener("change", () => {
-    refreshProductSuggestions();
+    refreshProductOptions();
     if (editingId === null) {
         document.getElementById("product-name").value = "";
         document.getElementById("product-category").value = "";
-    }
-});
-
-// FIX: browsers only reliably pop open a <datalist> dropdown while typing --
-// clicking into a field that already holds a value (e.g. one picked from
-// the list a moment ago) usually won't reopen it. Clearing the field on
-// focus forces the full list back open; blur restores the old value if the
-// user didn't end up picking/typing anything new.
-function reviveDatalistOnFocus(inputId) {
-    const input = document.getElementById(inputId);
-    input.addEventListener("focus", () => {
-        input.dataset.prevValue = input.value;
-        input.value = "";
-    });
-    input.addEventListener("blur", () => {
-        if (input.value === "" && input.dataset.prevValue) {
-            input.value = input.dataset.prevValue;
-        }
-        delete input.dataset.prevValue;
-    });
-}
-reviveDatalistOnFocus("product-name");
-reviveDatalistOnFocus("product-category");
-
-// FIX: picking (or typing) a name that matches one of this supplier's
-// existing products auto-fills the category they already filed it under,
-// so category stays consistent instead of drifting per typo per entry.
-document.getElementById("product-name").addEventListener("input", (e) => {
-    const supplierId = document.getElementById("product-supplier").value;
-    const typed = normalizeProductName(e.target.value);
-    const match = [
-        ...allProducts.filter(p => String(p.supplier_id) === String(supplierId)),
-        ...getSupplierProductDrafts(supplierId)
-    ].find(p => normalizeProductName(p.name) === typed);
-    if (match) {
-        document.getElementById("product-category").value = match.category || "";
     }
 });
 
@@ -560,6 +532,10 @@ function startEdit(id) {
     // harmless before, but now it also drives which name/category
     // suggestions show up, so it has to reflect the row being edited.
     document.getElementById("product-supplier").value = p.supplier_id;
+    // Options must be rebuilt for this supplier BEFORE selecting the
+    // product's own name/category below, or the select would have no
+    // matching <option> yet to select.
+    refreshProductOptions();
     document.getElementById("product-name").value = p.name;
     document.getElementById("product-category").value = p.category || "";
     // Buying price/margin aren't stored anywhere, so there's nothing to
@@ -571,7 +547,6 @@ function startEdit(id) {
     document.getElementById("product-price").value = p.price;
     document.getElementById("margin-calc-hint").className = "field-hint";
     document.getElementById("margin-calc-hint").textContent = "";
-    refreshProductSuggestions();
     document.getElementById("form-title").textContent = "Edit product";
     document.getElementById("product-submit").textContent = "Update product";
     document.getElementById("product-cancel").style.display = "inline-block";
@@ -689,7 +664,7 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
             );
             if (!proceed) {
                 document.getElementById("product-supplier").value = original.supplier_id;
-                refreshProductSuggestions();
+                refreshProductOptions();
                 return;
             }
         }
