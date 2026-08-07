@@ -19,9 +19,20 @@ INSERT INTO product (supplier_id, name, category, price) VALUES
 (3, 'Table Lamp',            'Home',         899.00);
 
 -- ---------- Warehouses ----------
-INSERT INTO warehouse (name, location) VALUES
-('Dhaka Hub', 'Tejgaon, Dhaka'),
-('Chittagong Hub', 'Agrabad, Chittagong');
+-- Only capacity is set. rent_per_unit_day is a GENERATED column derived from
+-- it, so it cannot be inserted -- Postgres fills it in from the size bands:
+--
+--   Dhaka       400 units -> 2.50 /unit/day
+--   Chittagong  150 units -> 3.00 /unit/day   (small hub, dearest per unit)
+--
+-- Chittagong being the SMALLER hub is what makes it the expensive one to hold
+-- stock in: bulk storage is cheaper per unit. It also ends up ~83% full after
+-- the purchases below, so the capacity warning is visible in the UI without
+-- anything failing. Try pushing another 30 units into it to see
+-- trg_enforce_warehouse_capacity reject the write.
+INSERT INTO warehouse (name, location, capacity_units) VALUES
+('Dhaka Hub', 'Tejgaon, Dhaka', 400),
+('Chittagong Hub', 'Agrabad, Chittagong', 150);
 
 -- ---------- Purchases ----------
 -- Inventory should never "magically" appear -- every unit of opening
@@ -41,6 +52,28 @@ CALL place_purchase(2, 2, 3, 60,  250.00);   -- Global Textiles -> Chittagong Hu
 CALL place_purchase(2, 2, 4, 12,  1000.00);  -- Global Textiles -> Chittagong Hub -> Denim Jacket x12
 CALL place_purchase(3, 2, 5, 5,   700.00);   -- HomeEssentials -> Chittagong Hub -> Pan Set x5
 CALL place_purchase(3, 2, 6, 20,  450.00);   -- HomeEssentials -> Chittagong Hub -> Table Lamp x20
+
+-- ---------- Backdate a few purchases so stock has a realistic age spread ----------
+-- warehouse_stock_age derives how long stock has been sitting from
+-- purchase.purchase_date, so with every purchase landing "now" the whole
+-- warehouse would look Fresh and both the rent surcharge and the
+-- oldest-stock-first routing rule would have nothing to show. Backdating
+-- five of the twelve purchases puts stock in all four age bands.
+--
+-- Matched on warehouse + product rather than purchase_id, because each
+-- CALL place_purchase above creates exactly one purchase with one item --
+-- so this stays correct even if the ids shift.
+UPDATE purchase p SET purchase_date = NOW() - INTERVAL '95 day'
+WHERE p.warehouse_id = 1 AND EXISTS (SELECT 1 FROM purchase_item pi WHERE pi.purchase_id = p.purchase_id AND pi.product_id = 4);   -- Dhaka Denim Jacket -> Dead stock (3.0x)
+UPDATE purchase p SET purchase_date = NOW() - INTERVAL '72 day'
+WHERE p.warehouse_id = 1 AND EXISTS (SELECT 1 FROM purchase_item pi WHERE pi.purchase_id = p.purchase_id AND pi.product_id = 5);   -- Dhaka Pan Set     -> Stale (2.0x)
+UPDATE purchase p SET purchase_date = NOW() - INTERVAL '45 day'
+WHERE p.warehouse_id = 1 AND EXISTS (SELECT 1 FROM purchase_item pi WHERE pi.purchase_id = p.purchase_id AND pi.product_id = 6);   -- Dhaka Table Lamp  -> Aging (1.5x)
+UPDATE purchase p SET purchase_date = NOW() - INTERVAL '105 day'
+WHERE p.warehouse_id = 2 AND EXISTS (SELECT 1 FROM purchase_item pi WHERE pi.purchase_id = p.purchase_id AND pi.product_id = 1);   -- Chittagong Earbuds -> Dead stock (3.0x)
+UPDATE purchase p SET purchase_date = NOW() - INTERVAL '38 day'
+WHERE p.warehouse_id = 2 AND EXISTS (SELECT 1 FROM purchase_item pi WHERE pi.purchase_id = p.purchase_id AND pi.product_id = 4);   -- Chittagong Denim   -> Aging (1.5x)
+
 
 -- ---------- Customers ----------
 INSERT INTO customer (name, contact) VALUES
@@ -85,12 +118,19 @@ INSERT INTO click (link_id, click_time, country, device, customer_id) VALUES
 
 -- ---------- Orders (via the tested procedure -- this also fires the
 -- inventory-reduction trigger automatically for each one) ----------
-CALL place_order(1, 3, 1, 2);   -- Ariful buys 2x Earbuds via Email campaign
-CALL place_order(2, 1, 1, 1);   -- Nusrat buys 1x Earbuds via Facebook
-CALL place_order(3, 4, 3, 3);   -- Rakib buys 3x T-Shirt via Facebook
-CALL place_order(4, 5, 3, 1);   -- Sadia buys 1x T-Shirt via WhatsApp
-CALL place_order(5, 7, 5, 2);   -- Tanvir buys 2x Pan Set via Email
-CALL place_order(1, 6, 5, 1);   -- Ariful buys 1x Pan Set via Instagram
+-- reduce_inventory() now routes each line through pick_source_warehouse(),
+-- which ships from whichever hub holds the OLDEST stock of that product, and
+-- records the winner on the shipment's 'Packed' status row. Because of the
+-- backdating above the first two orders leave from Chittagong even though
+-- Dhaka holds twice as many earbuds -- Chittagong's are 105 days old and
+-- costing 3x rent, so clearing them first is the point. Check afterwards
+-- with:  SELECT order_id, source_hub FROM order_fulfilment ORDER BY order_id;
+CALL place_order(1, 3, 1, 2);   -- Ariful buys 2x Earbuds via Email campaign  -> Chittagong (105d stock)
+CALL place_order(2, 1, 1, 1);   -- Nusrat buys 1x Earbuds via Facebook        -> Chittagong (105d stock)
+CALL place_order(3, 4, 3, 3);   -- Rakib buys 3x T-Shirt via Facebook         -> Dhaka (both fresh, Dhaka has more)
+CALL place_order(4, 5, 3, 1);   -- Sadia buys 1x T-Shirt via WhatsApp         -> Dhaka (both fresh, Dhaka has more)
+CALL place_order(5, 7, 5, 2);   -- Tanvir buys 2x Pan Set via Email           -> Dhaka (72d stock)
+CALL place_order(1, 6, 5, 1);   -- Ariful buys 1x Pan Set via Instagram       -> Dhaka (72d stock)
 
 -- ---------- Shipments ----------
 -- trg_create_shipment_on_order already auto-created one shipment per order
@@ -117,13 +157,22 @@ FROM shipment s WHERE s.shipment_id = ss.shipment_id AND s.order_id = 4 AND ss.s
 -- ---------- Shipment status progression (beyond the auto-created 'Packed') ----------
 -- Order 1 goes all the way to Delivered; orders 2-6 are intentionally left
 -- short of 'Delivered', so pending_shipment_report() has something to show.
+-- The 'In Transit' rows read their location back off the 'Packed' row rather
+-- than hardcoding a hub name, so they always agree with whichever hub
+-- pick_source_warehouse() actually chose for the order.
 INSERT INTO shipment_status (shipment_id, location, status, updated_time)
-SELECT shipment_id, 'Dhaka Hub', 'In Transit', NOW() - INTERVAL '3 day' FROM shipment WHERE order_id = 1
+SELECT s.shipment_id, packed.location, 'In Transit', NOW() - INTERVAL '3 day'
+FROM shipment s
+JOIN shipment_status packed ON packed.shipment_id = s.shipment_id AND packed.status = 'Packed'
+WHERE s.order_id = 1
 UNION ALL
-SELECT shipment_id, 'Customer Area', 'Out For Delivery', NOW() - INTERVAL '2 day' FROM shipment WHERE order_id = 1
+SELECT s.shipment_id, 'Customer Area', 'Out For Delivery', NOW() - INTERVAL '2 day' FROM shipment s WHERE s.order_id = 1
 UNION ALL
-SELECT shipment_id, 'Customer Area', 'Delivered', NOW() - INTERVAL '1 day' FROM shipment WHERE order_id = 1
+SELECT s.shipment_id, 'Customer Area', 'Delivered', NOW() - INTERVAL '1 day' FROM shipment s WHERE s.order_id = 1
 UNION ALL
-SELECT shipment_id, 'Dhaka Hub', 'In Transit', NOW() - INTERVAL '2 day' FROM shipment WHERE order_id = 2;
+SELECT s.shipment_id, packed.location, 'In Transit', NOW() - INTERVAL '2 day'
+FROM shipment s
+JOIN shipment_status packed ON packed.shipment_id = s.shipment_id AND packed.status = 'Packed'
+WHERE s.order_id = 2;
 
 
