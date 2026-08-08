@@ -48,7 +48,7 @@
             </section>
 
             <div class="card full-width">
-                <h2 id="form-title">Add product</h2>
+                <h2 id="form-title">Set Product Price</h2>
                 <!-- FIX: shown instead of a raw insert error when there are no suppliers yet -->
                 <div id="product-prereq-warning"></div>
                 <form id="product-form">
@@ -66,13 +66,14 @@
                     <div class="form-row two-col">
                         <div>
                             <label for="product-category">Category</label>
-                            <select id="product-category"></select>
+                            <select id="product-category" required></select>
                         </div>
                     </div>
                     <div class="form-row two-col">
                         <div>
                             <label for="product-buying-price">Buying price</label>
                             <input type="number" id="product-buying-price" class="no-spinner" min="0" step="1" required>
+                            <div class="field-hint" id="buying-price-hint"></div>
                         </div>
                         <div>
                             <label for="product-margin">Profit margin %</label>
@@ -82,7 +83,7 @@
                     <label for="product-price">Selling price</label>
                     <input type="number" id="product-price" class="no-spinner" min="0" step="1" required readonly>
                     <div class="field-hint" id="margin-calc-hint"></div>
-                    <button type="submit" id="product-submit">Add product</button>
+                    <button type="submit" id="product-submit">Set Product Price</button>
                     <button type="button" class="btn-ghost" id="product-cancel" style="display:none; margin-top:10px;">Cancel edit</button>
                 </form>
                 <div id="product-status" class="status-msg"></div>
@@ -102,7 +103,7 @@
                                 <th class="th-sort" data-key="name">Name</th>
                                 <th class="th-sort" data-key="supplier_name">Supplier</th>
                                 <th class="th-sort" data-key="category">Category</th>
-                                <th class="th-sort num" data-key="price">Price</th>
+                                <th class="th-sort num" data-key="price">Selling price</th>
                                 <th class="th-sort" data-key="totalStock">Stock</th>
                                 <th style="text-align:center;">Actions</th>
                             </tr>
@@ -162,30 +163,21 @@ renderSidebar("products");
 let allProducts = [];
 let allSuppliersForSelect = [];
 let editingId = null;       // FIX: tracked so the row being edited can be highlighted in the table
+let editingIsExplicit = false; // whether editingId came from the table's Edit button vs. picking an existing name above
 let openHistoryId = null;   // tracked so the row whose purchase-history panel is open stays highlighted too
-const SUPPLIER_PRODUCT_DRAFTS_KEY = "trackchain:supplier-product-drafts";
 
-function getSupplierProductDrafts(supplierId) {
-    try {
-        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
-        return Array.isArray(drafts[supplierId]) ? drafts[supplierId] : [];
-    } catch (error) {
-        console.warn("Could not read supplier product suggestions", error);
-        return [];
-    }
-}
-
-function removeSupplierProductDraft(supplierId, productName) {
-    try {
-        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
-        if (!Array.isArray(drafts[supplierId])) return;
-        const normalized = normalizeProductName(productName);
-        drafts[supplierId] = drafts[supplierId].filter(product =>
-            normalizeProductName(product.name) !== normalized);
-        localStorage.setItem(SUPPLIER_PRODUCT_DRAFTS_KEY, JSON.stringify(drafts));
-    } catch (error) {
-        console.warn("Could not clear supplier product suggestion", error);
-    }
+// FIX: success messages ("Product Price Set", "Product deleted.") used to sit
+// in the DOM forever until the next action overwrote them. A stale timer is
+// cancelled so two quick actions in a row don't have the first one's fade-out
+// wipe the second one's message out from under it.
+let statusOkTimer = null;
+function showStatusOk(el, text) {
+    el.textContent = text;
+    el.className = "status-msg status-ok";
+    clearTimeout(statusOkTimer);
+    statusOkTimer = setTimeout(() => {
+        if (el.textContent === text) { el.textContent = ""; el.className = "status-msg"; }
+    }, 3000);
 }
 
 async function loadSupplierOptions() {
@@ -193,7 +185,12 @@ async function loadSupplierOptions() {
     if (error) { console.error(error); return; }
     allSuppliersForSelect = data || [];
     const select = document.getElementById("product-supplier");
-    select.innerHTML = allSuppliersForSelect.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
+    // FIX: without a blank leading option, the browser auto-selects the
+    // first supplier alphabetically -- silently attributing a new product
+    // to whichever supplier happens to sort first, unless the user notices
+    // and changes it. An explicit "-- Select --" forces a real choice.
+    select.innerHTML = `<option value="">— Select —</option>`
+        + allSuppliersForSelect.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
     refreshProductOptions();
 
     // FIX: without a supplier to pick, submitting used to send parseInt(undefined)
@@ -251,7 +248,7 @@ const productView = createTableView({
     emptyMsg: "No products yet — add one above.",
     noMatchMsg: "No products match that search.",
     csvName: () => "products.csv",
-    csvHeaders: ["Name", "Supplier", "Category", "Price", "Stock"],
+    csvHeaders: ["Name", "Supplier", "Category", "Selling Price", "Stock"],
     csvRow: r => [r.name, r.supplier_name, r.category || "", r.price, r.totalStock],
     rowHtml: r => {
         // FIX: only offer Restock once stock is actually low/out -- matches
@@ -259,14 +256,20 @@ const productView = createTableView({
         // still rendered (just hidden) when stock is fine, so History/Edit/
         // Delete stay in a fixed column instead of shifting left row to row.
         const low = (r.totalStock ?? 0) < 10;
-        const restockBtn = `<a href="/purchases/index.html?supplier=${r.supplier_id}&product=${r.product_id}"
+        // FIX: no ".html" here on purpose -- a server that "cleans" URLs
+        // (e.g. the `serve` package's default behavior) 301-redirects
+        // "/purchases/index.html?..." to "/purchases/index" and drops the
+        // query string in that redirect, silently losing the pre-fill.
+        // "/purchases" resolves straight to index.html with no redirect at
+        // all, so the query string survives untouched.
+        const restockBtn = `<a href="/purchases?supplier=${r.supplier_id}&product=${r.product_id}"
             class="restock-slot" ${low ? "" : `style="visibility:hidden;pointer-events:none;" tabindex="-1" aria-hidden="true"`}>
             <button type="button" class="btn-ghost btn-small">Restock</button></a>`;
         return `
         <td data-id="${r.product_id}">${escapeHtml(r.name)}</td>
         <td>${escapeHtml(r.supplier_name) || "-"}</td>
         <td>${escapeHtml(r.category) || "-"}</td>
-        <td class="num">${formatMoney(r.price)}</td>
+        <td class="num">${r.price > 0 ? formatMoney(r.price) : "Not set"}</td>
         <td>${stockBadge(r.totalStock ?? 0)}</td>
         <td class="table-actions">
             ${restockBtn}
@@ -306,22 +309,53 @@ function updateProductStats() {
     document.getElementById("stat-total-value").textContent = formatMoney(totalValue);
 }
 
+// There's no "last restocked" column on product itself -- it's derived
+// here from purchase/purchase_item (which do carry purchase_date), taking
+// the latest purchase date per product across every warehouse it's stocked
+// in. Products never purchased (e.g. added but never restocked yet) have
+// nothing to derive from and sort to the bottom.
 async function loadProducts() {
-    const [{ data, error }, { data: inventory }] = await Promise.all([
+    const [{ data, error }, { data: inventory }, { data: purchaseItems, error: purchErr }] = await Promise.all([
         supabaseClient
             .from("product")
             .select("product_id, name, category, price, supplier_id, supplier:supplier_id(name)")
             .order("name"),
-        supabaseClient.from("inventory").select("product_id, quantity")
+        supabaseClient.from("inventory").select("product_id, quantity"),
+        supabaseClient.from("purchase_item").select("product_id, unit_cost, purchase:purchase_id(purchase_date)")
     ]);
     if (error) { console.error(error); return; }
+    if (purchErr) console.error(purchErr);
     const stockByProduct = {};
     (inventory || []).forEach(i => { stockByProduct[i.product_id] = (stockByProduct[i.product_id] || 0) + i.quantity; });
-    allProducts = (data || []).map(p => ({
-        ...p,
-        totalStock: stockByProduct[p.product_id] ?? 0,
-        supplier_name: p.supplier?.name ?? ""
-    }));
+
+    // Buying price in the form below is pre-filled from whichever purchase
+    // landed most recently (real cost paid), not an average -- matches the
+    // "how much did we actually pay, most recently" question a Product
+    // Manager is asking when they go to set/refresh a selling price.
+    const lastRestock = {};
+    const lastUnitCost = {};
+    (purchaseItems || []).forEach(pi => {
+        const date = pi.purchase?.purchase_date;
+        if (!date) return;
+        if (!lastRestock[pi.product_id] || date > lastRestock[pi.product_id]) {
+            lastRestock[pi.product_id] = date;
+            lastUnitCost[pi.product_id] = pi.unit_cost;
+        }
+    });
+
+    allProducts = (data || [])
+        .map(p => ({
+            ...p,
+            totalStock: stockByProduct[p.product_id] ?? 0,
+            supplier_name: p.supplier?.name ?? "",
+            lastRestock: lastRestock[p.product_id] || null,
+            lastUnitCost: lastUnitCost[p.product_id] ?? null
+        }))
+        // FIX: most-recently-added product on top. product_id is a SERIAL,
+        // so higher = newer -- a simple proxy for "recent action" that needs
+        // no extra DB column (editing an existing product's price doesn't
+        // move it, since its id never changes).
+        .sort((a, b) => b.product_id - a.product_id);
     refreshProductView();
     updateProductStats();
     refreshProductOptions();
@@ -345,30 +379,68 @@ function populateProductSelect(selectId, values) {
 function refreshProductOptions() {
     const supplierId = document.getElementById("product-supplier").value;
     const ownProducts = allProducts.filter(p => String(p.supplier_id) === String(supplierId));
-    const catalogProducts = [...ownProducts, ...getSupplierProductDrafts(supplierId)];
 
     populateProductSelect("product-name",
-        [...new Set(catalogProducts.map(p => p.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+        [...new Set(ownProducts.map(p => p.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
     populateProductSelect("product-category",
-        [...new Set(catalogProducts.map(p => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+        [...new Set(ownProducts.map(p => p.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)));
 }
 
 document.getElementById("product-name").addEventListener("change", () => {
     const select = document.getElementById("product-name");
     const categorySelect = document.getElementById("product-category");
+    // FIX: category is set programmatically below, which doesn't fire a
+    // native "change" event on categorySelect -- so the "change" listener
+    // that clears a stale setCustomValidity() message (from a prior failed
+    // submit) never runs, leaving the browser showing a "Please fill up
+    // the Category field" bubble even once a category is auto-filled in.
+    categorySelect.setCustomValidity("");
     if (!select.value) { categorySelect.value = ""; return; }
 
     // FIX: picking a name that matches one of this supplier's existing
-    // products or drafts auto-selects the category it's already filed
-    // under, so category stays consistent instead of drifting per entry.
+    // products auto-selects the category it's already filed under, so
+    // category stays consistent instead of drifting per entry.
     const supplierId = document.getElementById("product-supplier").value;
     const typed = normalizeProductName(select.value);
-    const match = [
-        ...allProducts.filter(p => String(p.supplier_id) === String(supplierId)),
-        ...getSupplierProductDrafts(supplierId)
-    ].find(p => normalizeProductName(p.name) === typed);
+    const match = allProducts
+        .filter(p => String(p.supplier_id) === String(supplierId))
+        .find(p => normalizeProductName(p.name) === typed);
     categorySelect.value = match?.category || "";
+
+    // FIX: this form is for pricing a product for the FIRST time. A product
+    // that already has a price is not something picking its name here
+    // should silently let you overwrite -- that's what the Edit button in
+    // the table is for. So a name whose price is already set is rejected
+    // back to blank instead of quietly starting an auto price-set edit.
+    if (match && match.price > 0 && String(match.product_id) !== String(editingId)) {
+        select.value = "";
+        categorySelect.value = "";
+        const statusDiv = document.getElementById("product-status");
+        statusDiv.innerHTML = `"${escapeHtml(match.name)}" already has a price set (${formatMoney(match.price)}). ` +
+            `Use the Edit button on its row in the table below to change it.`;
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+
+    // FIX: every name in this dropdown already belongs to an existing
+    // product for this supplier -- names are only ever created via the
+    // Supplier page, never typed here. So picking one always means "price
+    // this one", never "create a new row with this name". Without this,
+    // submitting used to always attempt an INSERT and collide with the
+    // record that already has this name, blocking the user with a
+    // duplicate error instead of just letting them set its price.
+    if (match && String(match.product_id) !== String(editingId)) {
+        startEdit(match.product_id, false);
+    }
 });
+
+const productCategorySelect = document.getElementById("product-category");
+productCategorySelect.addEventListener("invalid", () => {
+    if (!productCategorySelect.value) {
+        productCategorySelect.setCustomValidity("Please fill up the Category field.");
+    }
+});
+productCategorySelect.addEventListener("change", () => productCategorySelect.setCustomValidity(""));
 
 // Selling price is never typed directly -- Buying price + Profit margin %
 // are the only inputs; Price is read-only and always derived from them.
@@ -522,10 +594,11 @@ document.getElementById("product-lowstock-filter").addEventListener("click", (e)
     refreshProductView();
 });
 
-function startEdit(id) {
+function startEdit(id, isExplicitEdit = true) {
     const p = allProducts.find(r => String(r.product_id) === String(id));
     if (!p) return;
     editingId = id;
+    editingIsExplicit = isExplicitEdit;
     document.getElementById("product-id").value = p.product_id;
     // FIX: this was never set before, so the Supplier dropdown kept
     // whatever was last picked instead of the product's actual supplier --
@@ -538,31 +611,48 @@ function startEdit(id) {
     refreshProductOptions();
     document.getElementById("product-name").value = p.name;
     document.getElementById("product-category").value = p.category || "";
-    // Buying price/margin aren't stored anywhere, so there's nothing to
-    // restore here -- Price shows the saved value for reference, but
-    // saving this edit still requires re-entering buying price + margin
-    // (Price is never editable directly, even while editing).
-    document.getElementById("product-buying-price").value = "";
+    // Margin is never stored, so there's nothing to restore there -- still
+    // has to be re-entered every save. Buying price pre-fills from this
+    // product's most recent purchase (the real cost paid), when one exists;
+    // it stays editable in case that cost is stale or about to change.
+    const buyingPriceHint = document.getElementById("buying-price-hint");
+    if (p.lastUnitCost != null) {
+        document.getElementById("product-buying-price").value = p.lastUnitCost;
+        buyingPriceHint.textContent = `Auto-filled from the last recorded purchase (${formatMoney(p.lastUnitCost)}) — adjust if needed.`;
+    } else {
+        document.getElementById("product-buying-price").value = "";
+        buyingPriceHint.textContent = "No purchase history yet — enter what you expect to pay.";
+    }
     document.getElementById("product-margin").value = "";
-    document.getElementById("product-price").value = p.price;
+    // Margin is blank until re-entered, so the derived Selling price can't
+    // be trusted yet either -- showing the OLD stored price here reads as
+    // if it were already the (unsaved) result of this edit. Leave it blank
+    // until recalcSellingPrice() fills it in from real buying price + margin.
+    document.getElementById("product-price").value = "";
     document.getElementById("margin-calc-hint").className = "field-hint";
     document.getElementById("margin-calc-hint").textContent = "";
-    document.getElementById("form-title").textContent = "Edit product";
-    document.getElementById("product-submit").textContent = "Update product";
+    document.getElementById("form-title").textContent = isExplicitEdit ? "Edit product" : "Set Product Price";
+    document.getElementById("product-submit").textContent = isExplicitEdit ? "Update product" : "Set Product Price";
     document.getElementById("product-cancel").style.display = "inline-block";
     refreshProductView();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // FIX: only jump the page when Edit was clicked from the table (far
+    // down the page) -- not when startEdit() is auto-triggered by picking
+    // an existing name in the form above, which used to yank the page back
+    // to the top out from under whoever was mid-scroll filling it in.
+    if (isExplicitEdit) window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function resetForm() {
     document.getElementById("product-form").reset();
     document.getElementById("product-id").value = "";
-    document.getElementById("form-title").textContent = "Add product";
-    document.getElementById("product-submit").textContent = "Add product";
+    document.getElementById("form-title").textContent = "Set Product Price";
+    document.getElementById("product-submit").textContent = "Set Product Price";
     document.getElementById("product-cancel").style.display = "none";
     editingId = null;
+    editingIsExplicit = false;
     document.getElementById("margin-calc-hint").className = "field-hint";
     document.getElementById("margin-calc-hint").textContent = "";
+    document.getElementById("buying-price-hint").textContent = "";
     refreshProductView();
 }
 
@@ -594,6 +684,11 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
     }
     if (payload.category && payload.category.length > 80) {
         statusDiv.textContent = "Category is too long (80 characters max).";
+        statusDiv.className = "status-msg status-error";
+        return;
+    }
+    if (!payload.category) {
+        statusDiv.textContent = "Please fill up the Category field.";
         statusDiv.className = "status-msg status-error";
         return;
     }
@@ -632,17 +727,20 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
         return;
     }
 
-    // Soft duplicate warning, mirrors Supplier Management's pattern: same
-    // normalized name under the SAME supplier is very likely the same item.
+    // FIX: this used to be a soft "continue anyway?" warning, but a second
+    // product with the same name under the same supplier is never actually
+    // useful -- it just splits one real item's stock across two disconnected
+    // rows (exactly what happened with Cotton T-Shirt: #3 and #21 silently
+    // tracked separate inventory, and restocking one never touched the
+    // other). Blocked outright now; editing the existing record is always
+    // the right move, even for a genuine price change.
     const duplicate = findDuplicateProduct(payload.name, payload.supplier_id, id);
     if (duplicate) {
-        const proceed = confirm(
-            `${duplicate.supplier_name || "This supplier"} already has a product named "${duplicate.name}" ` +
-            `(#${duplicate.product_id}, ${formatMoney(duplicate.price)}).\n\n` +
-            `If this is the same item, Cancel and edit that record instead.\n` +
-            `Continue anyway if it's genuinely a different item with the same name?`
-        );
-        if (!proceed) return;
+        statusDiv.innerHTML = `${escapeHtml(duplicate.supplier_name || "This supplier")} already has a product named ` +
+            `"${escapeHtml(duplicate.name)}" (#${duplicate.product_id}, ${formatMoney(duplicate.price)}). ` +
+            `Edit that record instead of adding another one with the same name.`;
+        statusDiv.className = "status-msg status-error";
+        return;
     }
 
     // Real supply-chain edge case: reassigning an existing product to a
@@ -684,9 +782,12 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
             return;
         }
 
-        statusDiv.textContent = id ? "Product updated." : "Product added.";
-        statusDiv.className = "status-msg status-ok";
-        if (!id) removeSupplierProductDraft(payload.supplier_id, payload.name);
+        // FIX: was always "Product updated." whenever id was set -- but id
+        // gets set both by clicking Edit AND by just picking an existing
+        // name above (the normal price-set flow), so it needs to distinguish
+        // those the same way the form title/button already do.
+        const successMsg = !id ? "Product added." : (editingIsExplicit ? "Product updated." : "Product price set.");
+        showStatusOk(statusDiv, successMsg);
         resetForm();
         loadProducts();
     } finally {
@@ -704,8 +805,7 @@ async function deleteProduct(id) {
         return;
     }
     if (String(openHistoryId) === String(id)) closeHistory();
-    statusDiv.textContent = "Product deleted.";
-    statusDiv.className = "status-msg status-ok";
+    showStatusOk(statusDiv, "Product deleted.");
     loadProducts();
 }
 

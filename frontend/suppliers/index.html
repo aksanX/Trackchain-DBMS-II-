@@ -49,11 +49,11 @@
                         </div>
                         <div>
                             <label for="supplier-phone">Phone</label>
-                            <input type="text" id="supplier-phone" maxlength="20">
+                            <input type="text" id="supplier-phone" required maxlength="11" inputmode="numeric" placeholder="01XXXXXXXXX">
                         </div>
                     </div>
                     <label for="supplier-address">Address</label>
-                    <input type="text" id="supplier-address">
+                    <input type="text" id="supplier-address" required>
                     <section id="supplier-products-section" class="supplier-products-section" aria-labelledby="supplier-products-title">
                         <div class="supplier-products-heading">
                             <div>
@@ -120,7 +120,7 @@
                 </section>
                 <div class="table-responsive">
                     <table id="supplier-products-table">
-                        <thead><tr><th>Name</th><th>Category</th><th>Price</th><th>Stock</th></tr></thead>
+                        <thead><tr><th>Name</th><th>Category</th><th>Buying price</th><th>Stock</th></tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
@@ -142,22 +142,22 @@ renderSidebar("suppliers");
 let allSuppliers = [];
 let editingId = null;         // FIX: tracked so the row being edited can be highlighted in the table
 let openDetailsId = null;     // tracked so the row whose details panel is open stays highlighted too
-const SUPPLIER_PRODUCT_DRAFTS_KEY = "trackchain:supplier-product-drafts";
 let supplierProductDrafts = [];
+let supplierStatusTimer = null;
 
-function saveSupplierProductDrafts(supplierId, products) {
-    try {
-        const drafts = JSON.parse(localStorage.getItem(SUPPLIER_PRODUCT_DRAFTS_KEY) || "{}");
-        const existing = Array.isArray(drafts[supplierId]) ? drafts[supplierId] : [];
-        products.forEach(product => {
-            const alreadySaved = existing.some(item =>
-                normalizeSupplierName(item.name) === normalizeSupplierName(product.name));
-            if (!alreadySaved) existing.push({ name: product.name, category: product.category });
-        });
-        drafts[supplierId] = existing;
-        localStorage.setItem(SUPPLIER_PRODUCT_DRAFTS_KEY, JSON.stringify(drafts));
-    } catch (error) {
-        console.warn("Could not save supplier product suggestions", error);
+// Success messages ("Supplier added/updated/deleted") self-dismiss after a
+// few seconds like a toast; error messages stay put since the user needs
+// time to read and act on them.
+function setSupplierStatus(message, type) {
+    const statusDiv = document.getElementById("supplier-status");
+    clearTimeout(supplierStatusTimer);
+    statusDiv.textContent = message;
+    statusDiv.className = "status-msg status-" + type;
+    if (type === "ok") {
+        supplierStatusTimer = setTimeout(() => {
+            statusDiv.textContent = "";
+            statusDiv.className = "status-msg";
+        }, 3000);
     }
 }
 
@@ -180,6 +180,64 @@ function closeSupplierProductEditor() {
     document.getElementById("add-supplier-product").disabled = false;
 }
 
+function setSupplierProductEditorError(message = "") {
+    const error = document.getElementById("supplier-product-error");
+    if (error) error.textContent = message;
+}
+
+// A product draft becomes a selectable catalog item later on the Products
+// page. Require both identifying fields here so incomplete drafts cannot
+// turn into incomplete product records.
+function validateSupplierProductEditor() {
+    const nameInput = document.getElementById("new-supplier-product-name");
+    const categoryInput = document.getElementById("new-supplier-product-category");
+    if (!nameInput || !categoryInput) return true;
+
+    nameInput.setCustomValidity("");
+    categoryInput.setCustomValidity("");
+    const name = nameInput.value.trim();
+    const category = categoryInput.value.trim();
+    if (!name && !category) {
+        const message = "Please fill up the Product name and Category fields.";
+        nameInput.setCustomValidity(message);
+        categoryInput.setCustomValidity(message);
+        setSupplierProductEditorError(message);
+        nameInput.focus();
+        return false;
+    }
+    if (!name) {
+        const message = "Please fill up the Product name field.";
+        nameInput.setCustomValidity(message);
+        setSupplierProductEditorError(message);
+        nameInput.focus();
+        return false;
+    }
+    if (!category) {
+        const message = "Please fill up the Category field.";
+        categoryInput.setCustomValidity(message);
+        setSupplierProductEditorError(message);
+        categoryInput.focus();
+        return false;
+    }
+
+    // FIX: two drafts with the same name would both become real, separate
+    // product rows for this supplier once submitted -- each independently
+    // tracked, silently splitting one item's stock across two disconnected
+    // entries (see Products page's own duplicate block for why that's a
+    // real problem, not just noise).
+    const normalized = normalizeSupplierName(name);
+    if (supplierProductDrafts.some(p => normalizeSupplierName(p.name) === normalized)) {
+        const message = `"${name}" is already in this supplier's product list above.`;
+        nameInput.setCustomValidity(message);
+        setSupplierProductEditorError(message);
+        nameInput.focus();
+        return false;
+    }
+
+    setSupplierProductEditorError();
+    return true;
+}
+
 function openSupplierProductEditor() {
     const editor = document.getElementById("supplier-product-editor");
     if (editor.children.length) {
@@ -190,21 +248,34 @@ function openSupplierProductEditor() {
     editor.innerHTML = `
         <div class="supplier-product-editor-box">
             <div class="form-row two-col">
-                <div><label>Product name</label><input type="text" id="new-supplier-product-name" maxlength="150"></div>
-                <div><label>Category</label><input type="text" id="new-supplier-product-category" maxlength="80"></div>
+                <div><label for="new-supplier-product-name">Product name</label><input type="text" id="new-supplier-product-name" maxlength="150" required></div>
+                <div><label for="new-supplier-product-category">Category</label><input type="text" id="new-supplier-product-category" maxlength="80" required></div>
             </div>
+            <div id="supplier-product-error" class="field-error" role="alert" aria-live="polite"></div>
             <button type="button" class="btn-ghost btn-small" id="save-supplier-product">Add</button>
             <button type="button" class="btn-ghost btn-small" id="cancel-supplier-product">Cancel</button>
         </div>`;
     document.getElementById("new-supplier-product-name").focus();
     document.getElementById("cancel-supplier-product").addEventListener("click", closeSupplierProductEditor);
     document.getElementById("save-supplier-product").addEventListener("click", () => {
+        if (!validateSupplierProductEditor()) return;
         const name = document.getElementById("new-supplier-product-name").value.trim();
         const category = document.getElementById("new-supplier-product-category").value.trim();
-        if (!name) return;
-        supplierProductDrafts.push({ name, category: category || null });
+        supplierProductDrafts.push({ name, category });
         renderSupplierProductList();
         closeSupplierProductEditor();
+    });
+    [["new-supplier-product-name", "Product name"], ["new-supplier-product-category", "Category"]].forEach(([id, label]) => {
+        const input = document.getElementById(id);
+        input.addEventListener("input", () => {
+            input.setCustomValidity("");
+            setSupplierProductEditorError();
+        });
+        input.addEventListener("invalid", () => {
+            const message = `Please fill up the ${label} field.`;
+            input.setCustomValidity(message);
+            setSupplierProductEditorError(message);
+        });
     });
 }
 
@@ -242,9 +313,12 @@ function stockBadge(quantity) {
     return quantity;
 }
 
+// BD mobile numbers only: exactly 11 digits, starting with 0 (e.g. 01712345678).
+// No +, -, spaces, or parens -- the input itself strips those live (see the
+// "input" listener below), this is just the final gate at submit time.
 function isValidPhone(phone) {
     if (!phone) return true; // optional field
-    return /^[0-9+\-() ]{6,20}$/.test(phone);
+    return /^0\d{10}$/.test(phone);
 }
 
 // Display-only formatting for standard BD numbers -- storage/validation
@@ -370,33 +444,40 @@ async function toggleDetails(supplierId, supplierName) {
     if (tbody) tbody.innerHTML = `<tr><td colspan="4" class="tbl-loading">Loading…</td></tr>`;
     document.getElementById("supplier-details-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
 
-    const [{ data: products, error: prodErr }, { data: inventory }] = await Promise.all([
-        supabaseClient.from("product").select("product_id, name, category, price").eq("supplier_id", supplierId).order("name"),
-        supabaseClient.from("inventory").select("product_id, quantity")
+    // Purchase totals: query purchase/purchase_item directly by supplier_id
+    // rather than the purchase_history view, which only exposes a
+    // supplier NAME column (schema.sql:675-691) -- name-based lookups
+    // would risk collisions if two suppliers ever share a name. Also
+    // carries product_id so it can double as the source for each product's
+    // Buying price column below, instead of a second, near-identical query.
+    const [{ data: products, error: prodErr }, { data: inventory }, { data: purchases, error: purchErr }] = await Promise.all([
+        supabaseClient.from("product").select("product_id, name, category").eq("supplier_id", supplierId).order("name"),
+        supabaseClient.from("inventory").select("product_id, quantity"),
+        supabaseClient.from("purchase")
+            .select("purchase_id, purchase_date, purchase_item(product_id, quantity, unit_cost)")
+            .eq("supplier_id", supplierId)
+            .order("purchase_date", { ascending: false })
     ]);
     if (prodErr) { console.error(prodErr); return; }
+    if (purchErr) { console.error(purchErr); return; }
 
     const stockByProduct = {};
     (inventory || []).forEach(i => { stockByProduct[i.product_id] = (stockByProduct[i.product_id] || 0) + i.quantity; });
 
+    // purchases are already sorted newest-first, so the first time a
+    // product_id turns up here is its most recent buying price from this supplier.
+    const lastUnitCost = {};
+    (purchases || []).forEach(p => (p.purchase_item || []).forEach(item => {
+        if (!(item.product_id in lastUnitCost)) lastUnitCost[item.product_id] = item.unit_cost;
+    }));
+
     fillTable("supplier-products-table", products, p => `
         <td>${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.category) || "-"}</td>
-        <td>${formatMoney(p.price)}</td>
+        <td>${lastUnitCost[p.product_id] != null ? formatMoney(lastUnitCost[p.product_id]) : "Not recorded"}</td>
         <td>${stockBadge(stockByProduct[p.product_id] ?? 0)}</td>
     `, 4);
     animateCount(document.getElementById("det-products"), (products || []).length);
-
-    // Purchase totals: query purchase/purchase_item directly by supplier_id
-    // rather than the purchase_history view, which only exposes a
-    // supplier NAME column (schema.sql:675-691) -- name-based lookups
-    // would risk collisions if two suppliers ever share a name.
-    const { data: purchases, error: purchErr } = await supabaseClient
-        .from("purchase")
-        .select("purchase_id, purchase_date, purchase_item(quantity, unit_cost)")
-        .eq("supplier_id", supplierId)
-        .order("purchase_date", { ascending: false });
-    if (purchErr) { console.error(purchErr); return; }
 
     let totalSpend = 0;
     (purchases || []).forEach(p => (p.purchase_item || []).forEach(item => {
@@ -423,7 +504,7 @@ function startEdit(id) {
     document.getElementById("supplier-name").value = s.name;
     document.getElementById("supplier-phone").value = s.phone || "";
     document.getElementById("supplier-address").value = s.address || "";
-    document.getElementById("supplier-products-section").style.display = "none";
+    resetSupplierProductRows(); // start edit with an empty "new products" list, not leftover drafts
     document.getElementById("form-title").textContent = "Edit supplier";
     document.getElementById("supplier-submit").textContent = "Update supplier";
     document.getElementById("supplier-cancel").style.display = "inline-block";
@@ -437,7 +518,6 @@ function resetForm() {
     document.getElementById("form-title").textContent = "Add supplier";
     document.getElementById("supplier-submit").textContent = "Add supplier";
     document.getElementById("supplier-cancel").style.display = "none";
-    document.getElementById("supplier-products-section").style.display = "";
     resetSupplierProductRows();
     editingId = null;
     refreshSupplierView(); // FIX: clears the highlight immediately, without needing a full reload
@@ -445,23 +525,29 @@ function resetForm() {
 
 document.getElementById("supplier-cancel").addEventListener("click", resetForm);
 
+// Strip anything non-digit as the user types, live -- so pasting or typing
+// "+880 171-234-5678" collapses straight to digits instead of getting
+// rejected wholesale at submit time.
+document.getElementById("supplier-phone").addEventListener("input", (e) => {
+    e.target.value = e.target.value.replace(/\D/g, "").slice(0, 11);
+});
+
 document.getElementById("supplier-form").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const statusDiv = document.getElementById("supplier-status");
     const submitBtn = document.getElementById("supplier-submit");
     const id = document.getElementById("supplier-id").value;
+    if (!validateSupplierProductEditor()) return;
     const payload = {
         name: document.getElementById("supplier-name").value.trim(),
-        phone: document.getElementById("supplier-phone").value.trim() || null,
-        address: document.getElementById("supplier-address").value.trim() || null
+        phone: document.getElementById("supplier-phone").value.trim(),
+        address: document.getElementById("supplier-address").value.trim()
     };
 
     // FIX: the "required" attribute only blocks a literally-empty field --
-    // a name of all spaces still passes it, then .trim() above turns it
+    // a value of all spaces still passes it, then .trim() above turns it
     // into "", which the DB happily accepts (NOT NULL, not "non-empty").
     if (!payload.name) {
-        statusDiv.textContent = "Name can't be blank.";
-        statusDiv.className = "status-msg status-error";
+        setSupplierStatus("Name can't be blank.", "error");
         return;
     }
 
@@ -469,26 +555,36 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
     // browsers truncate pasted text to maxlength too, but this doesn't
     // rely on that being universally true.
     if (payload.name.length > 150) {
-        statusDiv.textContent = "Name is too long (150 characters max).";
-        statusDiv.className = "status-msg status-error";
+        setSupplierStatus("Name is too long (150 characters max).", "error");
         return;
     }
 
-    if (payload.phone && !isValidPhone(payload.phone)) {
-        statusDiv.textContent = "That doesn't look like a phone number — use digits, spaces, +, -, ( ) only.";
-        statusDiv.className = "status-msg status-error";
+    if (!payload.phone) {
+        setSupplierStatus("Phone can't be blank.", "error");
         return;
     }
 
-    let products = [];
-    if (!id) {
-        try {
-            products = collectSupplierProducts();
-        } catch (err) {
-            statusDiv.textContent = err.message;
-            statusDiv.className = "status-msg status-error";
-            return;
-        }
+    if (!isValidPhone(payload.phone)) {
+        setSupplierStatus("Phone number must be exactly 11 digits, starting with 0 (e.g. 01712345678).", "error");
+        return;
+    }
+
+    if (!payload.address) {
+        setSupplierStatus("Address can't be blank.", "error");
+        return;
+    }
+
+    const products = collectSupplierProducts();
+
+    // FIX: a supplier with zero products on file was previously allowed --
+    // it just sat there useless until someone came back and added products
+    // later (easy to forget). Only enforced for brand-new suppliers; an
+    // existing supplier being edited already has products on file (or the
+    // Delete flow's own warning already covers that case), so this doesn't
+    // force re-adding one on every edit.
+    if (!id && products.length === 0) {
+        setSupplierStatus("Add at least one product before creating this supplier.", "error");
+        return;
     }
 
     const duplicates = findPossibleDuplicates(payload.name, payload.phone, id);
@@ -508,6 +604,7 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
     // could fire the insert/update twice before the first one lands.
     submitBtn.disabled = true;
     try {
+        let supplierId = id;
         if (id) {
             const { error } = await supabaseClient.from("supplier").update(payload).eq("supplier_id", id);
             if (error) throw error;
@@ -518,17 +615,33 @@ document.getElementById("supplier-form").addEventListener("submit", async (e) =>
                 .select("supplier_id")
                 .single();
             if (supplierError) throw supplierError;
-
-            if (products.length) saveSupplierProductDrafts(supplier.supplier_id, products);
+            supplierId = supplier.supplier_id;
         }
 
-        statusDiv.textContent = id ? "Supplier updated." : "Supplier added.";
-        statusDiv.className = "status-msg status-ok";
+        // Price isn't collected here -- it's set later from Product
+        // Management's Buying price + Profit margin % inputs, which
+        // are required on every save (add OR edit) and always
+        // recompute Price from scratch. 0 is just a placeholder until
+        // then (the schema's price CHECK requires a non-negative
+        // number, not a real one yet), and the product table/details
+        // view show it as "Not set" rather than a real amount.
+        if (products.length) {
+            const { error: productsError } = await supabaseClient
+                .from("product")
+                .insert(products.map(p => ({
+                    supplier_id: supplierId,
+                    name: p.name,
+                    category: p.category,
+                    price: 0
+                })));
+            if (productsError) throw productsError;
+        }
+
+        setSupplierStatus(id ? "Supplier updated." : "Supplier added.", "ok");
         resetForm();
         loadSuppliers();
     } catch (error) {
-        statusDiv.textContent = "Error: " + error.message;
-        statusDiv.className = "status-msg status-error";
+        setSupplierStatus("Error: " + error.message, "error");
     } finally {
         submitBtn.disabled = false;
     }
@@ -574,15 +687,12 @@ async function deleteSupplier(id) {
     if (!confirm(confirmMsg)) return;
 
     const { error } = await supabaseClient.from("supplier").delete().eq("supplier_id", id);
-    const statusDiv = document.getElementById("supplier-status");
     if (error) {
-        statusDiv.textContent = friendlySupplierDeleteError(error.message, productCount, purchaseCount);
-        statusDiv.className = "status-msg status-error";
+        setSupplierStatus(friendlySupplierDeleteError(error.message, productCount, purchaseCount), "error");
         return;
     }
     if (String(openDetailsId) === String(id)) closeDetails();
-    statusDiv.textContent = "Supplier deleted.";
-    statusDiv.className = "status-msg status-ok";
+    setSupplierStatus("Supplier deleted.", "ok");
     loadSuppliers();
 }
 

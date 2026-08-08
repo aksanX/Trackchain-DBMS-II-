@@ -181,10 +181,16 @@ header a.logo-link {
 }
 
 .sidebar-link .icon {
-    font-size: 15px;
-    width: 18px;
-    text-align: center;
+    width: 17px;
+    height: 17px;
     flex-shrink: 0;
+    color: var(--text-muted);
+    transition: color 0.15s ease;
+}
+
+.sidebar-link:hover .icon,
+.sidebar-link.active .icon {
+    color: currentColor;
 }
 
 .sidebar-link:hover {
@@ -539,6 +545,7 @@ tbody tr:last-child td {
 .table-actions {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
 }
 

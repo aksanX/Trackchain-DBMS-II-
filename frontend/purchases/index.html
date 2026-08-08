@@ -133,19 +133,27 @@ const preselectProduct = reorderParams.get("product");
 // supplier->product cascade can be computed from one consistent snapshot.
 let dropdownState = { suppliers: [], warehouses: [], products: [] };
 
+function normalizeProductName(name) {
+    return (name || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 async function loadDropdowns() {
     const [{ data: suppliers }, { data: warehouses }, { data: products }] = await Promise.all([
         supabaseClient.from("supplier").select("supplier_id, name").order("name"),
         supabaseClient.from("warehouse").select("warehouse_id, name").order("name"),
-        supabaseClient.from("product").select("product_id, name, supplier_id").order("name")
+        supabaseClient.from("product").select("product_id, name, supplier_id, price").order("name")
     ]);
 
     dropdownState = { suppliers: suppliers || [], warehouses: warehouses || [], products: products || [] };
 
-    document.getElementById("purchase-supplier").innerHTML =
-        dropdownState.suppliers.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
-    document.getElementById("purchase-warehouse").innerHTML =
-        dropdownState.warehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
+    // FIX: without a blank leading option, the browser auto-selects the
+    // first supplier/warehouse alphabetically -- so every purchase silently
+    // started pre-attributed to whichever one sorts first, unless the user
+    // noticed and changed it. An explicit "-- Select --" forces a real choice.
+    document.getElementById("purchase-supplier").innerHTML = `<option value="">— Select —</option>`
+        + dropdownState.suppliers.map(s => `<option value="${s.supplier_id}">${escapeHtml(s.name)}</option>`).join("");
+    document.getElementById("purchase-warehouse").innerHTML = `<option value="">— Select —</option>`
+        + dropdownState.warehouses.map(w => `<option value="${w.warehouse_id}">${escapeHtml(w.name)}</option>`).join("");
 
     const statusDiv = document.getElementById("purchase-status");
 
@@ -171,7 +179,7 @@ async function loadDropdowns() {
             const mismatched = preselectSupplier && String(preselectSupplier) !== String(product.supplier_id);
             statusDiv.textContent = mismatched
                 ? `Supplier corrected to match "${product.name}" — check the quantity and cost, then submit.`
-                : "Pre-filled from a low-stock Restock link — check the quantity and cost, then submit.";
+                : "Check the quantity and cost, then submit.";
             statusDiv.className = "status-msg status-ok";
         }
     } else if (preselectSupplier && dropdownState.suppliers.some(s => String(s.supplier_id) === preselectSupplier)) {
@@ -208,6 +216,17 @@ function updateFormState() {
     warningDiv.innerHTML = "";
 
     const supplierId = document.getElementById("purchase-supplier").value;
+
+    // FIX: with Supplier now starting blank (see loadDropdowns), Product
+    // has to start blank too -- it can't be "filtered to the selected
+    // supplier" when nothing's selected yet.
+    if (!supplierId) {
+        productSelect.innerHTML = `<option value="">— Select —</option>`;
+        noProductNote.style.display = "none";
+        submitBtn.disabled = true;
+        return;
+    }
+
     const filtered = dropdownState.products.filter(p => String(p.supplier_id) === String(supplierId));
 
     if (filtered.length === 0) {
@@ -216,7 +235,26 @@ function updateFormState() {
         noProductNote.style.display = "block";
         submitBtn.disabled = true;
     } else {
-        productSelect.innerHTML = filtered.map(p => `<option value="${p.product_id}">${escapeHtml(p.name)}</option>`).join("");
+        // FIX: two products can share a name under the same supplier (the
+        // app warns but doesn't block this on the Add Product page) -- each
+        // is still a fully separate item with its own price and its own
+        // independently-tracked stock. Left as bare names, identical-looking
+        // options are impossible to tell apart, and picking the wrong one
+        // silently restocks a completely different product. Appending price
+        // only kicks in for names that actually collide, so the normal
+        // (unambiguous) case stays uncluttered.
+        const nameCounts = {};
+        filtered.forEach(p => {
+            const key = normalizeProductName(p.name);
+            nameCounts[key] = (nameCounts[key] || 0) + 1;
+        });
+        productSelect.innerHTML = `<option value="">— Select —</option>`
+            + filtered.map(p => {
+                const label = nameCounts[normalizeProductName(p.name)] > 1
+                    ? `${p.name} (${formatMoney(p.price)}, #${p.product_id})`
+                    : p.name;
+                return `<option value="${p.product_id}">${escapeHtml(label)}</option>`;
+            }).join("");
         noProductNote.style.display = "none";
         submitBtn.disabled = false;
     }
