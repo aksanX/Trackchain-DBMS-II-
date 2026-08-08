@@ -95,13 +95,40 @@ function renderStockRows(rows) {
     `, 4);
 }
 
+// There's no "last restocked" column on inventory itself -- it's derived
+// here from purchase/purchase_item (which do carry purchase_date), grouped
+// down to the latest purchase per product+warehouse pair. Stock that only
+// ever moved via a stock_transfer or was never purchased at all (e.g.
+// seeded directly) has no purchase to derive from, and sorts to the bottom.
 async function loadStock() {
-    const { data, error } = await supabaseClient
-        .from("inventory")
-        .select("quantity, product:product_id(name, category), warehouse:warehouse_id(name)")
-        .order("quantity", { ascending: true });
+    const [{ data, error }, { data: purchaseItems, error: purchErr }] = await Promise.all([
+        supabaseClient
+            .from("inventory")
+            .select("product_id, warehouse_id, quantity, product:product_id(name, category), warehouse:warehouse_id(name)"),
+        supabaseClient
+            .from("purchase_item")
+            .select("product_id, purchase:purchase_id(purchase_date, warehouse_id)")
+    ]);
     if (error) { console.error(error); return; }
-    allStock = data || [];
+    if (purchErr) console.error(purchErr);
+
+    const lastRestock = {};
+    (purchaseItems || []).forEach(pi => {
+        const warehouseId = pi.purchase?.warehouse_id;
+        const date = pi.purchase?.purchase_date;
+        if (!warehouseId || !date) return;
+        const key = `${pi.product_id}:${warehouseId}`;
+        if (!lastRestock[key] || date > lastRestock[key]) lastRestock[key] = date;
+    });
+
+    allStock = (data || [])
+        .map(r => ({ ...r, lastRestock: lastRestock[`${r.product_id}:${r.warehouse_id}`] || null }))
+        .sort((a, b) => {
+            if (!a.lastRestock && !b.lastRestock) return 0;
+            if (!a.lastRestock) return 1;
+            if (!b.lastRestock) return -1;
+            return new Date(b.lastRestock) - new Date(a.lastRestock);
+        });
     renderStockRows(allStock);
 
     const { count: productCount } = await supabaseClient.from("product").select("*", { count: "exact", head: true });
