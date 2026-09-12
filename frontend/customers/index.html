@@ -16,6 +16,7 @@
                 <h1>Customer</h1>
                 <p>Everyone who has ever bought from the storefront, plus any you add manually. Guest checkouts create these automatically by matching on phone number.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -60,10 +61,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("customers");
+renderUserHeaderProfile();
+if (checkPageAccess("customers")) {
+    renderSidebar("customers");
+}
 
 let allCustomers = [];
 

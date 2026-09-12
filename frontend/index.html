@@ -14,8 +14,9 @@
         <header class="shell-header">
             <div>
                 <h1>Dashboard Overview</h1>
-                <p>Everything at a glance — revenue, orders, campaigns and fulfillment, across the whole business.</p>
+                <p id="dashboard-subtitle">Everything at a glance — revenue, orders, campaigns and fulfillment, across the whole business.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -141,10 +142,20 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("dashboard");
+renderUserHeaderProfile();
+if (checkPageAccess("dashboard")) {
+    renderSidebar("dashboard");
+    const user = getLoggedInUser();
+    const activeRole = user ? user.roleId : "admin";
+    const subtitleEl = document.getElementById("dashboard-subtitle");
+    if (subtitleEl && ROLES[activeRole]) {
+        subtitleEl.textContent = `${ROLES[activeRole].icon} ${ROLES[activeRole].label} Workspace — ${ROLES[activeRole].description}`;
+    }
+}
 
 function barChart(canvasId, labels, data, colors) {
     return new Chart(document.getElementById(canvasId), {
