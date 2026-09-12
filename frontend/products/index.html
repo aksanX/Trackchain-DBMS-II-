@@ -160,10 +160,13 @@
 <script src="/js/ui-helpers.js"></script>
 <script src="/js/table-view.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("products")) {
-    renderSidebar("products");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("products")) {
+        renderSidebar("products");
+    }
+})();
 
 let allProducts = [];
 let allSuppliersForSelect = [];

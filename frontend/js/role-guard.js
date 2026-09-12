@@ -1,16 +1,18 @@
 // TrackChain Role-Based Access Control (RBAC) & Authentication Engine
-// Supports Username & Password authentication, session locking, route guards, and logout.
+// Backed by real Supabase Auth accounts + the staff_profiles table.
+// Accounts are provisioned by an admin (see /staff/index.html), never
+// self-signed-up and never hardcoded here.
 
 const ROLES = {
     admin: {
         id: "admin",
         label: "Admin",
         icon: "👑",
-        description: "Full access across all modules, metrics, reports & audit logs",
+        description: "Full access across all modules, metrics, reports, audit logs & staff accounts",
         allowedKeys: [
             "dashboard", "suppliers", "products", "warehouses", "purchases",
             "inventory", "customers", "orders", "campaigns", "shipments",
-            "reports", "audit-logs"
+            "reports", "audit-logs", "staff"
         ]
     },
     purchasing: {
@@ -43,73 +45,85 @@ const ROLES = {
     }
 };
 
-// Staff user accounts with username and password
-const STAFF_ACCOUNTS = {
-    "admin":      { username: "admin",      password: "123", name: "Alex Admin",       roleId: "admin" },
-    "purchasing": { username: "purchasing", password: "123", name: "Sarah Purchasing",  roleId: "purchasing" },
-    "marketing":  { username: "marketing",  password: "123", name: "Marcus Marketing", roleId: "marketing" },
-    "warehouse":  { username: "warehouse",  password: "123", name: "David Warehouse",  roleId: "warehouse" },
-    "shipment":   { username: "shipment",   password: "123", name: "Elena Shipment",   roleId: "shipment" }
+const PAGE_LABELS = {
+    dashboard: "Dashboard Overview", suppliers: "Supplier Management", products: "Product Management",
+    warehouses: "Warehouse", purchases: "Purchase Management", inventory: "Inventory",
+    customers: "Customer", orders: "Orders", campaigns: "Campaign Management", shipments: "Shipment",
+    reports: "Reports", "audit-logs": "Audit Logs", staff: "Staff Management"
+};
+const PAGE_HREFS = {
+    dashboard: "/index.html", suppliers: "/suppliers/index.html", products: "/products/index.html",
+    warehouses: "/warehouses/index.html", purchases: "/purchases/index.html", inventory: "/inventory/index.html",
+    customers: "/customers/index.html", orders: "/orders/index.html", campaigns: "/campaigns/index.html",
+    shipments: "/shipments/index.html", reports: "/reports/index.html", "audit-logs": "/audit-logs/index.html",
+    staff: "/staff/index.html"
 };
 
-const SESSION_STORAGE_KEY = "trackchain_session_user";
+// Populated by initAuth(); every page must await it before calling
+// checkPageAccess/renderSidebar/renderUserHeaderProfile.
+let _cachedUser = null;
 
-function getLoggedInUser() {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY) || sessionStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    try {
-        const user = JSON.parse(raw);
-        if (user && ROLES[user.roleId]) {
-            return user;
-        }
-    } catch (e) {
-        console.error("Invalid session format", e);
+async function initAuth() {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session) {
+        _cachedUser = null;
+        return null;
     }
-    return null;
+
+    const { data: profile } = await supabaseClient
+        .from("staff_profiles")
+        .select("full_name, role, is_active")
+        .eq("id", session.user.id)
+        .single();
+
+    if (!profile || !profile.is_active) {
+        // Deleted, deactivated, or never provisioned -- don't leave a dangling session.
+        await supabaseClient.auth.signOut();
+        _cachedUser = null;
+        return null;
+    }
+
+    const roleObj = ROLES[profile.role];
+    _cachedUser = {
+        id: session.user.id,
+        email: session.user.email,
+        username: profile.full_name,
+        roleId: profile.role,
+        roleName: roleObj ? roleObj.label : profile.role
+    };
+    return _cachedUser;
 }
 
-function authenticateUser(username, password, remember = true) {
-    const cleanUser = (username || "").trim().toLowerCase();
-    const cleanPass = (password || "").trim();
+function getLoggedInUser() {
+    return _cachedUser;
+}
 
-    const account = Object.values(STAFF_ACCOUNTS).find(
-        acc => acc.username.toLowerCase() === cleanUser && acc.password === cleanPass
-    );
-
-    if (!account) {
-        return { success: false, message: "Invalid username or password. Please try again." };
+async function loginWithPassword(email, password) {
+    const { error } = await supabaseClient.auth.signInWithPassword({
+        email: (email || "").trim().toLowerCase(),
+        password: password || ""
+    });
+    if (error) {
+        return { success: false, message: "Invalid email or password. Please try again." };
     }
 
-    const roleObj = ROLES[account.roleId];
-
-    const userSession = {
-        username: account.name,
-        userLoginHandle: account.username,
-        roleId: account.roleId,
-        roleName: roleObj ? roleObj.label : account.roleId,
-        loginTime: new Date().toISOString()
-    };
-
-    const storage = remember ? localStorage : sessionStorage;
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(userSession));
-
+    await initAuth();
+    if (!_cachedUser) {
+        return { success: false, message: "This account has no active staff role. Contact your admin." };
+    }
     return { success: true };
 }
 
-function loginAsQuick(roleId) {
-    const acc = STAFF_ACCOUNTS[roleId];
-    if (acc) {
-        return authenticateUser(acc.username, acc.password);
-    }
-    return { success: false, message: "Role account not found." };
+async function logout() {
+    await supabaseClient.auth.signOut();
+    _cachedUser = null;
+    window.location.href = "/login/index.html";
 }
 
-function logout() {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
-    sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    window.location.href = "/login/index.html";
+// Bearer token for calling the admin-manage-staff edge function.
+async function getAccessToken() {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    return session ? session.access_token : null;
 }
 
 function canRoleAccess(roleId, pageKey) {
@@ -117,8 +131,8 @@ function canRoleAccess(roleId, pageKey) {
     return ROLES[roleId].allowedKeys.includes(pageKey);
 }
 
-function checkPageAccess(pageKey) {
-    // Exclude public pages and login page from guard check
+// Every module page calls this (after awaiting initAuth()) before rendering.
+async function checkPageAccess(pageKey) {
     if (window.location.pathname.includes("/storefront/") || window.location.pathname.includes("/login/")) {
         return true;
     }
@@ -143,19 +157,16 @@ function renderUserHeaderProfile(mountId = "role-selector-mount") {
 
     const user = getLoggedInUser();
     if (!user) {
-        mount.innerHTML = `
-            <a href="/login/index.html" class="btn primary btn-small">Sign In</a>
-        `;
+        mount.innerHTML = `<a href="/login/index.html" class="btn primary btn-small">Sign In</a>`;
         return;
     }
 
     const roleObj = ROLES[user.roleId];
-
     mount.innerHTML = `
         <div class="user-header-profile">
             <div class="user-info-text">
                 <span class="user-name">${user.username}</span>
-                <span class="user-role-badge">${roleObj ? roleObj.icon : ''} ${roleObj ? roleObj.label : user.roleId}</span>
+                <span class="user-role-badge">${roleObj ? roleObj.icon : ""} ${roleObj ? roleObj.label : user.roleId}</span>
             </div>
             <button type="button" class="btn-logout" onclick="logout()" title="Log out of session">
                 <span>🚪</span> Log Out
@@ -170,35 +181,7 @@ function renderAccessRestrictedPage(pageKey, activeRole) {
     const user = getLoggedInUser();
 
     const allowedModulesHtml = roleObj.allowedKeys.map(key => {
-        const labels = {
-            dashboard: "Dashboard Overview",
-            suppliers: "Supplier Management",
-            products: "Product Management",
-            warehouses: "Warehouse",
-            purchases: "Purchase Management",
-            inventory: "Inventory",
-            customers: "Customer",
-            orders: "Orders",
-            campaigns: "Campaign Management",
-            shipments: "Shipment",
-            reports: "Reports",
-            "audit-logs": "Audit Logs"
-        };
-        const hrefs = {
-            dashboard: "/index.html",
-            suppliers: "/suppliers/index.html",
-            products: "/products/index.html",
-            warehouses: "/warehouses/index.html",
-            purchases: "/purchases/index.html",
-            inventory: "/inventory/index.html",
-            customers: "/customers/index.html",
-            orders: "/orders/index.html",
-            campaigns: "/campaigns/index.html",
-            shipments: "/shipments/index.html",
-            reports: "/reports/index.html",
-            "audit-logs": "/audit-logs/index.html"
-        };
-        return `<a href="${hrefs[key]}" class="btn secondary">${labels[key]}</a>`;
+        return `<a href="${PAGE_HREFS[key]}" class="btn secondary">${PAGE_LABELS[key]}</a>`;
     }).join(" ");
 
     main.innerHTML = `
@@ -213,7 +196,7 @@ function renderAccessRestrictedPage(pageKey, activeRole) {
             <div class="card access-restricted-card">
                 <div class="access-restricted-icon">🔒</div>
                 <h2>Module Access Restricted</h2>
-                <p>Hello <strong>${user ? user.username : 'User'}</strong>, your current role <strong>${roleObj.icon} ${roleObj.label}</strong> does not have permission to view or edit this module.</p>
+                <p>Hello <strong>${user ? user.username : "User"}</strong>, your current role <strong>${roleObj.icon} ${roleObj.label}</strong> does not have permission to view or edit this module.</p>
                 <p class="role-desc-sub">${roleObj.description}</p>
                 <div class="access-restricted-actions">
                     <p><strong>Available modules for your role:</strong></p>

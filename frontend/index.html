@@ -146,16 +146,19 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("dashboard")) {
-    renderSidebar("dashboard");
-    const user = getLoggedInUser();
-    const activeRole = user ? user.roleId : "admin";
-    const subtitleEl = document.getElementById("dashboard-subtitle");
-    if (subtitleEl && ROLES[activeRole]) {
-        subtitleEl.textContent = `${ROLES[activeRole].icon} ${ROLES[activeRole].label} Workspace — ${ROLES[activeRole].description}`;
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("dashboard")) {
+        renderSidebar("dashboard");
+        const user = getLoggedInUser();
+        const activeRole = user ? user.roleId : "admin";
+        const subtitleEl = document.getElementById("dashboard-subtitle");
+        if (subtitleEl && ROLES[activeRole]) {
+            subtitleEl.textContent = `${ROLES[activeRole].icon} ${ROLES[activeRole].label} Workspace — ${ROLES[activeRole].description}`;
+        }
     }
-}
+})();
 
 function barChart(canvasId, labels, data, colors) {
     return new Chart(document.getElementById(canvasId), {

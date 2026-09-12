@@ -71,10 +71,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("reports")) {
-    renderSidebar("reports");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("reports")) {
+        renderSidebar("reports");
+    }
+})();
 
 async function loadCampaignPerformance() {
     const { data, error } = await supabaseClient.from("campaign_performance").select("*");

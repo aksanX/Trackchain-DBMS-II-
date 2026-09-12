@@ -123,10 +123,13 @@
 <script src="/js/ui-helpers.js"></script>
 <script src="/js/table-view.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("purchases")) {
-    renderSidebar("purchases");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("purchases")) {
+        renderSidebar("purchases");
+    }
+})();
 
 // FIX: lets Inventory's low-stock "Reorder" link land here with the right
 // Supplier + Product already picked, e.g. /purchases/index.html?supplier=1&product=5

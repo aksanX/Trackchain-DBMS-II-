@@ -50,10 +50,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("orders")) {
-    renderSidebar("orders");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("orders")) {
+        renderSidebar("orders");
+    }
+})();
 
 let allOrders = [];
 let currentFilter = "new";

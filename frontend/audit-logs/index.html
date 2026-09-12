@@ -53,10 +53,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("audit-logs")) {
-    renderSidebar("audit-logs");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("audit-logs")) {
+        renderSidebar("audit-logs");
+    }
+})();
 
 let allLogs = [];
 let tableFilter = "";

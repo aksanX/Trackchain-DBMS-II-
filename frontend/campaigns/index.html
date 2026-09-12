@@ -143,10 +143,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("campaigns")) {
-    renderSidebar("campaigns");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("campaigns")) {
+        renderSidebar("campaigns");
+    }
+})();
 initPageTabs(".page-tabs");
 
 function barChart(canvasId, labels, data, colors, existing) {

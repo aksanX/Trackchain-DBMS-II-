@@ -139,10 +139,13 @@
 <script src="/js/ui-helpers.js"></script>
 <script src="/js/table-view.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("suppliers")) {
-    renderSidebar("suppliers");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("suppliers")) {
+        renderSidebar("suppliers");
+    }
+})();
 
 let allSuppliers = [];
 let editingId = null;         // FIX: tracked so the row being edited can be highlighted in the table

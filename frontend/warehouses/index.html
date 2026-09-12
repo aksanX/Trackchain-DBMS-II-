@@ -452,10 +452,13 @@ td.num, th.num { text-align: right; }
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("warehouses")) {
-    renderSidebar("warehouses");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("warehouses")) {
+        renderSidebar("warehouses");
+    }
+})();
 
 let allWarehouses = [];
 let selectedWarehouseId = null;

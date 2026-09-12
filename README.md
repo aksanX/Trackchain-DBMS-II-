@@ -97,6 +97,29 @@ Every internal page uses **root-relative** links (`/css/style.css`, `/orders/ind
 
 `config.js` is listed in `.gitignore` so your key never gets pushed to GitHub. Anyone cloning this repo must create their own `config.js` from the example file.
 
+### 4. Set up staff authentication (admin + roles)
+
+Login is real Supabase Auth now — no hardcoded passwords, no self-signup. An admin creates every other account from inside the app. One-time setup:
+
+1. **Run the migration**: SQL Editor → paste `database/migration_add_staff_auth.sql` → Run. This adds `staff_profiles` (RLS-protected — see the comment in that file for why it's treated differently from the other 17 tables, which stay open on purpose for this course project).
+2. **Create the first admin manually** (bootstrap — every account after this one is created in-app instead):
+   - Dashboard → **Authentication → Users → Add User** — real email, a password, toggle **Auto Confirm User** on.
+   - Copy that user's UUID, then in the SQL Editor:
+     ```sql
+     INSERT INTO public.staff_profiles (id, email, full_name, role, is_active)
+     VALUES ('<paste-the-uuid>', '<same-email>', '<your-name>', 'admin', TRUE);
+     ```
+3. **Deploy the admin edge function** (this is what lets the admin create/deactivate/delete staff from the UI — it's the only place the service role key is ever used, and it never reaches the browser):
+   ```
+   npm install -g supabase
+   supabase login
+   supabase link --project-ref xcufebaylsbpziwsljye
+   supabase functions deploy admin-manage-staff
+   ```
+4. Sign in at `/login/index.html` with the admin account from step 2 → **Staff Management** in the sidebar → create the Purchasing/Marketing/Warehouse/Shipment accounts for your team from there.
+
+Deactivating a staff account blocks their next login immediately (checked on every page load) without deleting their order/purchase/audit history. There's always at least one active admin required — the function refuses to deactivate or delete the last one.
+
 ## What each database object does (for the report / viva)
 
 | Object | Type | Purpose |

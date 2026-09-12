@@ -26,6 +26,7 @@ const SIDEBAR_ICONS = {
     shipments: '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
     reports: '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
     "audit-logs": '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+    staff: '<path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
     "external-link": '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>'
 };
 
@@ -64,6 +65,12 @@ const SIDEBAR_SECTIONS = [
         items: [
             { key: "reports",    label: "Reports",    href: "/reports/index.html",    icon: "reports" },
             { key: "audit-logs", label: "Audit Logs", href: "/audit-logs/index.html", icon: "audit-logs" }
+        ]
+    },
+    {
+        label: "Admin",
+        items: [
+            { key: "staff", label: "Staff Management", href: "/staff/index.html", icon: "staff" }
         ]
     }
 ];

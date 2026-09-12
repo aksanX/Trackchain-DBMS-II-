@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrackChain — Staff Management</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Staff Management</h1>
+                <p>Admin-only. Create staff accounts and assign their role — nobody can log in unless you've added them here. Deactivating an account blocks login immediately without deleting their history.</p>
+            </div>
+            <div id="role-selector-mount"></div>
+        </header>
+
+        <main class="shell-content">
+
+            <div class="card full-width">
+                <h2 id="form-title">Add staff account</h2>
+                <form id="staff-form">
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="staff-name">Full name</label>
+                            <input type="text" id="staff-name" required>
+                        </div>
+                        <div>
+                            <label for="staff-role">Role</label>
+                            <select id="staff-role" required>
+                                <option value="admin">👑 Admin</option>
+                                <option value="purchasing">🧾 Purchasing Officer</option>
+                                <option value="marketing">📣 Marketing Manager</option>
+                                <option value="warehouse">🏬 Warehouse Manager</option>
+                                <option value="shipment">🚚 Shipment Manager</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row two-col">
+                        <div>
+                            <label for="staff-email">Email (used to sign in)</label>
+                            <input type="email" id="staff-email" required>
+                        </div>
+                        <div>
+                            <label for="staff-password">Temporary password</label>
+                            <input type="text" id="staff-password" minlength="6" required placeholder="At least 6 characters">
+                        </div>
+                    </div>
+                    <button type="submit" id="staff-submit">Create staff account</button>
+                </form>
+                <div id="staff-status" class="status-msg"></div>
+            </div>
+
+            <div class="card full-width">
+                <h2>Staff accounts</h2>
+                <div class="table-responsive">
+                    <table id="staff-table">
+                        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Added</th><th>Actions</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("staff")) {
+        renderSidebar("staff");
+        loadStaff();
+    }
+})();
+
+const EDGE_FUNCTION_URL = `${SUPABASE_URL}/functions/v1/admin-manage-staff`;
+
+async function callStaffFunction(payload) {
+    const token = await getAccessToken();
+    const res = await fetch(EDGE_FUNCTION_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`,
+            "apikey": SUPABASE_ANON_KEY
+        },
+        body: JSON.stringify(payload)
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || "Request failed");
+    return body;
+}
+
+function roleBadge(roleId) {
+    const roleObj = ROLES[roleId];
+    if (!roleObj) return escapeHtml(roleId);
+    return `${roleObj.icon} ${roleObj.label}`;
+}
+
+function renderStaffRows(rows) {
+    const me = getLoggedInUser();
+    fillTable("staff-table", rows, r => `
+        <td>${escapeHtml(r.full_name)}</td>
+        <td>${escapeHtml(r.email)}</td>
+        <td>${roleBadge(r.role)}</td>
+        <td>${r.is_active ? '<span class="badge badge-status-delivered">Active</span>' : '<span class="badge badge-neutral">Deactivated</span>'}</td>
+        <td>${formatDate(r.created_at)}</td>
+        <td class="table-actions">
+            ${r.id === me.id ? "" : `
+                <button type="button" class="btn-ghost btn-small toggle-btn" data-id="${r.id}" data-active="${r.is_active}">${r.is_active ? "Deactivate" : "Reactivate"}</button>
+                <button type="button" class="btn-ghost btn-small btn-danger delete-btn" data-id="${r.id}">Delete</button>
+            `}
+        </td>
+    `, 6);
+
+    document.querySelectorAll(".toggle-btn").forEach(btn => btn.addEventListener("click", () => toggleActive(btn.dataset.id, btn.dataset.active === "true")));
+    document.querySelectorAll(".delete-btn").forEach(btn => btn.addEventListener("click", () => deleteStaff(btn.dataset.id)));
+}
+
+async function loadStaff() {
+    try {
+        const { staff } = await callStaffFunction({ action: "list" });
+        renderStaffRows(staff || []);
+    } catch (err) {
+        const statusDiv = document.getElementById("staff-status");
+        statusDiv.textContent = "Could not load staff: " + err.message;
+        statusDiv.className = "status-msg status-error";
+    }
+}
+
+document.getElementById("staff-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const statusDiv = document.getElementById("staff-status");
+    const submitBtn = document.getElementById("staff-submit");
+    submitBtn.disabled = true;
+
+    try {
+        await callStaffFunction({
+            action: "create",
+            full_name: document.getElementById("staff-name").value.trim(),
+            role: document.getElementById("staff-role").value,
+            email: document.getElementById("staff-email").value.trim(),
+            password: document.getElementById("staff-password").value
+        });
+        statusDiv.textContent = "Staff account created.";
+        statusDiv.className = "status-msg status-ok";
+        document.getElementById("staff-form").reset();
+        loadStaff();
+    } catch (err) {
+        statusDiv.textContent = "Error: " + err.message;
+        statusDiv.className = "status-msg status-error";
+    } finally {
+        submitBtn.disabled = false;
+    }
+});
+
+async function toggleActive(id, currentlyActive) {
+    const statusDiv = document.getElementById("staff-status");
+    try {
+        await callStaffFunction({ action: "set_active", id, is_active: !currentlyActive });
+        statusDiv.textContent = currentlyActive ? "Account deactivated." : "Account reactivated.";
+        statusDiv.className = "status-msg status-ok";
+        loadStaff();
+    } catch (err) {
+        statusDiv.textContent = "Error: " + err.message;
+        statusDiv.className = "status-msg status-error";
+    }
+}
+
+async function deleteStaff(id) {
+    if (!confirm("Permanently delete this staff account? This cannot be undone.")) return;
+    const statusDiv = document.getElementById("staff-status");
+    try {
+        await callStaffFunction({ action: "delete", id });
+        statusDiv.textContent = "Staff account deleted.";
+        statusDiv.className = "status-msg status-ok";
+        loadStaff();
+    } catch (err) {
+        statusDiv.textContent = "Error: " + err.message;
+        statusDiv.className = "status-msg status-error";
+    }
+}
+</script>
+
+</body>
+</html>

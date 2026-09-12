@@ -1,0 +1,2 @@
+[functions.admin-manage-staff]
+verify_jwt = true

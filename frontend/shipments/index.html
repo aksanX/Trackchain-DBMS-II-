@@ -79,10 +79,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("shipments")) {
-    renderSidebar("shipments");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("shipments")) {
+        renderSidebar("shipments");
+    }
+})();
 initPageTabs(".page-tabs");
 
 let statusHistory = {}; // shipment_id -> [{status, updated_time, location}] ascending

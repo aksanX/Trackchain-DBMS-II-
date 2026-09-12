@@ -83,10 +83,13 @@
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderUserHeaderProfile();
-if (checkPageAccess("inventory")) {
-    renderSidebar("inventory");
-}
+(async () => {
+    await initAuth();
+    renderUserHeaderProfile();
+    if (await checkPageAccess("inventory")) {
+        renderSidebar("inventory");
+    }
+})();
 initPageTabs(".page-tabs");
 
 let allStock = [];
