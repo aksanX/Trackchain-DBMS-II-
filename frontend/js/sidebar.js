@@ -54,8 +54,18 @@ function renderSidebar(activeKey) {
     const mount = document.getElementById("sidebar-mount");
     if (!mount) return;
 
+    const user = typeof getLoggedInUser === "function" ? getLoggedInUser() : null;
+    const activeRole = user ? user.roleId : "admin";
+    const activeRoleObj = (typeof ROLES !== "undefined" && ROLES[activeRole]) ? ROLES[activeRole] : null;
+
     const sectionsHtml = SIDEBAR_SECTIONS.map(section => {
-        const linksHtml = section.items.map(item => `
+        const allowedItems = section.items.filter(item => {
+            return typeof canRoleAccess === "function" ? canRoleAccess(activeRole, item.key) : true;
+        });
+
+        if (allowedItems.length === 0) return "";
+
+        const linksHtml = allowedItems.map(item => `
             <a class="sidebar-link${item.key === activeKey ? " active" : ""}" href="${item.href}">
                 <span class="icon">${item.icon}</span>${item.label}
             </a>
@@ -70,6 +80,13 @@ function renderSidebar(activeKey) {
         </a>
     `).join("");
 
+    const roleBadgeHtml = activeRoleObj ? `
+        <div class="sidebar-role-badge">
+            <span class="role-badge-icon">${activeRoleObj.icon}</span>
+            <span class="role-badge-name">${activeRoleObj.label}</span>
+        </div>
+    ` : "";
+
     mount.innerHTML = `
         <a class="sidebar-brand" href="/index.html">
             <div class="logo-mark">S</div>
@@ -78,6 +95,7 @@ function renderSidebar(activeKey) {
                 <span class="brand-tag">Internal Dashboard</span>
             </div>
         </a>
+        ${roleBadgeHtml}
         ${sectionsHtml}
         <div class="sidebar-section">
             <div class="sidebar-section-label">Public pages</div>

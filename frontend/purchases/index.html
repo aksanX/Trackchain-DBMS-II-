@@ -16,6 +16,7 @@
                 <h1>Purchase Management</h1>
                 <p>Inventory should never magically increase — every unit is traceable to a purchase from a supplier into a warehouse.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -81,10 +82,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("purchases");
+renderUserHeaderProfile();
+if (checkPageAccess("purchases")) {
+    renderSidebar("purchases");
+}
 
 // FIX: all three dropdown sources kept together so guardrails and the
 // supplier->product cascade can be computed from one consistent snapshot.

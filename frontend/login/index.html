@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrackChain — Staff Sign In</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: radial-gradient(circle at 10% 20%, rgba(220, 235, 252, 0.8) 0%, rgba(244, 243, 238, 0.95) 90%);
+    padding: 32px 20px;
+}
+
+.login-portal-container {
+    width: 100%;
+    max-width: 1040px;
+    margin: 0 auto;
+}
+
+.login-portal-header {
+    text-align: center;
+    margin-bottom: 36px;
+}
+
+.brand-logo-badge {
+    width: 58px;
+    height: 58px;
+    background: #0f172a;
+    color: #ffffff;
+    border-radius: 18px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Outfit', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 12px;
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.2);
+}
+
+.login-portal-header h1 {
+    font-size: 32px;
+    font-weight: 800;
+    font-family: 'Outfit', sans-serif;
+    color: #0f172a;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+}
+
+.login-portal-header p {
+    color: #475569;
+    font-size: 16px;
+    font-weight: 500;
+    max-width: 620px;
+    margin: 0 auto;
+}
+
+/* Two-column Layout: Roles Grid + Direct Login Form */
+.portal-grid-layout {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 28px;
+}
+
+@media (min-width: 840px) {
+    .portal-grid-layout {
+        grid-template-columns: 1.2fr 0.8fr;
+        align-items: start;
+    }
+}
+
+/* Role Selection Cards */
+.roles-section-title {
+    font-size: 14px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #334155;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.roles-cards-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.role-select-card {
+    background: #ffffff;
+    border: 2px solid #e2e8f0;
+    border-radius: 18px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+}
+
+.role-select-card:hover {
+    border-color: #2563eb;
+    background: #f8fafc;
+    transform: translateX(4px);
+    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.12);
+}
+
+.role-select-card.active-selected {
+    border-color: #2563eb;
+    background: #eff6ff;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.role-card-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.role-icon-box {
+    width: 48px;
+    height: 48px;
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.role-meta-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.role-title-text {
+    font-family: 'Outfit', sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+    color: #0f172a; /* High contrast dark bold text */
+}
+
+.role-user-badge {
+    font-size: 13px;
+    font-weight: 600;
+    color: #2563eb;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.role-pass-tag {
+    background: #e2e8f0;
+    color: #334155;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+}
+
+.role-select-action {
+    background: #0f172a;
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease;
+}
+
+.role-select-card:hover .role-select-action {
+    background: #2563eb;
+}
+
+/* Direct Credentials Login Form */
+.login-form-card {
+    background: #ffffff;
+    border: 2px solid #e2e8f0;
+    border-radius: 22px;
+    padding: 28px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+}
+
+.login-form-card h2 {
+    font-family: 'Outfit', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-bottom: 4px;
+}
+
+.login-form-card .subtitle {
+    font-size: 14px;
+    color: #64748b;
+    margin-bottom: 20px;
+}
+
+.login-error-alert {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #991b1b;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 13.5px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: none;
+}
+
+.form-group-item {
+    margin-bottom: 16px;
+}
+
+.form-group-item label {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 6px;
+}
+
+.form-group-item input {
+    width: 100%;
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1.5px solid #cbd5e1;
+    background: #f8fafc;
+    font-size: 15px;
+    font-weight: 500;
+    color: #0f172a;
+    outline: none;
+    transition: all 0.2s ease;
+}
+
+.form-group-item input:focus {
+    border-color: #2563eb;
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+.submit-login-btn {
+    width: 100%;
+    padding: 14px 20px;
+    border-radius: 14px;
+    border: none;
+    background: #0f172a;
+    color: #ffffff;
+    font-size: 15.5px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s ease;
+    margin-top: 8px;
+}
+
+.submit-login-btn:hover {
+    background: #2563eb;
+}
+</style>
+</head>
+<body>
+
+<div class="login-portal-container">
+
+    <!-- Top Brand Header -->
+    <div class="login-portal-header">
+        <div class="brand-logo-badge">S</div>
+        <h1>TrackChain Staff Portal</h1>
+        <p>Select your staff role account below or type your username and password to log in.</p>
+    </div>
+
+    <div class="portal-grid-layout">
+
+        <!-- Left Column: Clear Role Accounts Selection List -->
+        <div>
+            <div class="roles-section-title">
+                <span>👥</span> Available Staff Roles (Click any to auto-fill)
+            </div>
+            <div class="roles-cards-list">
+
+                <!-- 1. Admin -->
+                <div class="role-select-card" onclick="selectRole('admin', '123')">
+                    <div class="role-card-left">
+                        <div class="role-icon-box">👑</div>
+                        <div class="role-meta-info">
+                            <div class="role-title-text">System Admin</div>
+                            <div class="role-user-badge">
+                                Username: <strong>admin</strong>
+                                <span class="role-pass-tag">Pass: 123</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="role-select-action">Select →</button>
+                </div>
+
+                <!-- 2. Purchasing -->
+                <div class="role-select-card" onclick="selectRole('purchasing', '123')">
+                    <div class="role-card-left">
+                        <div class="role-icon-box">🧾</div>
+                        <div class="role-meta-info">
+                            <div class="role-title-text">Purchasing Officer</div>
+                            <div class="role-user-badge">
+                                Username: <strong>purchasing</strong>
+                                <span class="role-pass-tag">Pass: 123</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="role-select-action">Select →</button>
+                </div>
+
+                <!-- 3. Marketing -->
+                <div class="role-select-card" onclick="selectRole('marketing', '123')">
+                    <div class="role-card-left">
+                        <div class="role-icon-box">📣</div>
+                        <div class="role-meta-info">
+                            <div class="role-title-text">Marketing Manager</div>
+                            <div class="role-user-badge">
+                                Username: <strong>marketing</strong>
+                                <span class="role-pass-tag">Pass: 123</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="role-select-action">Select →</button>
+                </div>
+
+                <!-- 4. Warehouse -->
+                <div class="role-select-card" onclick="selectRole('warehouse', '123')">
+                    <div class="role-card-left">
+                        <div class="role-icon-box">🏬</div>
+                        <div class="role-meta-info">
+                            <div class="role-title-text">Warehouse Manager</div>
+                            <div class="role-user-badge">
+                                Username: <strong>warehouse</strong>
+                                <span class="role-pass-tag">Pass: 123</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="role-select-action">Select →</button>
+                </div>
+
+                <!-- 5. Shipment -->
+                <div class="role-select-card" onclick="selectRole('shipment', '123')">
+                    <div class="role-card-left">
+                        <div class="role-icon-box">🚚</div>
+                        <div class="role-meta-info">
+                            <div class="role-title-text">Shipment Manager</div>
+                            <div class="role-user-badge">
+                                Username: <strong>shipment</strong>
+                                <span class="role-pass-tag">Pass: 123</span>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="role-select-action">Select →</button>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Right Column: Login Credentials Form -->
+        <div class="login-form-card">
+            <h2>Sign In</h2>
+            <div class="subtitle">Enter staff credentials to authenticate</div>
+
+            <div id="login-error" class="login-error-alert"></div>
+
+            <form id="login-form">
+                <div class="form-group-item">
+                    <label for="username-input">Username</label>
+                    <input type="text" id="username-input" placeholder="e.g. admin or purchasing" required autocomplete="username">
+                </div>
+
+                <div class="form-group-item">
+                    <label for="password-input">Password</label>
+                    <input type="password" id="password-input" placeholder="••••••••" required autocomplete="current-password">
+                </div>
+
+                <button type="submit" class="submit-login-btn">Sign In to Dashboard →</button>
+            </form>
+        </div>
+
+    </div>
+
+</div>
+
+<script src="/js/role-guard.js"></script>
+<script>
+// Redirect if already authenticated
+if (getLoggedInUser()) {
+    window.location.href = "/index.html";
+}
+
+function selectRole(user, pass) {
+    document.getElementById("username-input").value = user;
+    document.getElementById("password-input").value = pass;
+    document.getElementById("login-error").style.display = "none";
+}
+
+document.getElementById("login-form").addEventListener("submit", function(e) {
+    e.preventDefault();
+    const userVal = document.getElementById("username-input").value;
+    const passVal = document.getElementById("password-input").value;
+    const errorBox = document.getElementById("login-error");
+
+    const result = authenticateUser(userVal, passVal);
+    if (result.success) {
+        window.location.href = "/index.html";
+    } else {
+        errorBox.textContent = result.message;
+        errorBox.style.display = "block";
+    }
+});
+</script>
+
+</body>
+</html>

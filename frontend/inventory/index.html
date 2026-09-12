@@ -16,6 +16,7 @@
                 <h1>Inventory</h1>
                 <p>Stock on hand across every warehouse.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -78,10 +79,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("inventory");
+renderUserHeaderProfile();
+if (checkPageAccess("inventory")) {
+    renderSidebar("inventory");
+}
 initPageTabs(".page-tabs");
 
 let allStock = [];

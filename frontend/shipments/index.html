@@ -16,6 +16,7 @@
                 <h1>Shipment</h1>
                 <p>Advance each shipment through Packed → In Transit → Out For Delivery → Delivered.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -74,10 +75,14 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("shipments");
+renderUserHeaderProfile();
+if (checkPageAccess("shipments")) {
+    renderSidebar("shipments");
+}
 initPageTabs(".page-tabs");
 
 let statusHistory = {}; // shipment_id -> [{status, updated_time, location}] ascending

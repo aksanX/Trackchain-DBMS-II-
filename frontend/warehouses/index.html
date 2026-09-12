@@ -122,6 +122,7 @@ td.num, th.num { text-align: right; }
             <div>
                 <h1>Warehouse</h1>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -447,10 +448,14 @@ td.num, th.num { text-align: right; }
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("warehouses");
+renderUserHeaderProfile();
+if (checkPageAccess("warehouses")) {
+    renderSidebar("warehouses");
+}
 
 let allWarehouses = [];
 let selectedWarehouseId = null;

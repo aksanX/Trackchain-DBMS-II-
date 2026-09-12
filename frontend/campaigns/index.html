@@ -16,6 +16,7 @@
                 <h1>Campaign Management</h1>
                 <p>Create campaigns, generate a tracking link per platform, and see what each one drives.</p>
             </div>
+            <div id="role-selector-mount"></div>
         </header>
 
         <main class="shell-content">
@@ -138,10 +139,14 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
 <script src="/js/sidebar.js"></script>
 <script src="/js/ui-helpers.js"></script>
 <script>
-renderSidebar("campaigns");
+renderUserHeaderProfile();
+if (checkPageAccess("campaigns")) {
+    renderSidebar("campaigns");
+}
 initPageTabs(".page-tabs");
 
 function barChart(canvasId, labels, data, colors, existing) {
