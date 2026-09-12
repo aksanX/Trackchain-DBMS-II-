@@ -660,8 +660,15 @@ $$ LANGUAGE plpgsql;
 -- Still ONE reusable pattern, just explicit about which id column
 -- it logs -- this is the standard, safe way to do this in Postgres.
 
+-- SECURITY DEFINER: a direct client write to "order" must still be able to
+-- write into audit_log even though audit_log's own RLS policy (Section 11)
+-- only lets admins SELECT it and gives no role an INSERT policy at all.
 CREATE OR REPLACE FUNCTION log_audit_order()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
         INSERT INTO audit_log(table_name, operation, record_id) VALUES ('order', TG_OP, OLD.order_id);
@@ -671,14 +678,18 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_audit_order
 AFTER INSERT OR UPDATE OR DELETE ON "order"
 FOR EACH ROW EXECUTE FUNCTION log_audit_order();
 
 CREATE OR REPLACE FUNCTION log_audit_inventory()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
         INSERT INTO audit_log(table_name, operation, record_id) VALUES ('inventory', TG_OP, OLD.inventory_id);
@@ -688,14 +699,18 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_audit_inventory
 AFTER INSERT OR UPDATE OR DELETE ON inventory
 FOR EACH ROW EXECUTE FUNCTION log_audit_inventory();
 
 CREATE OR REPLACE FUNCTION log_audit_purchase()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
         INSERT INTO audit_log(table_name, operation, record_id) VALUES ('purchase', TG_OP, OLD.purchase_id);
@@ -705,7 +720,7 @@ BEGIN
         RETURN NEW;
     END IF;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_audit_purchase
 AFTER INSERT OR UPDATE OR DELETE ON purchase
@@ -726,8 +741,15 @@ FOR EACH ROW EXECUTE FUNCTION log_audit_purchase();
 -- NULL. Writing the hub name there makes "which hub did this order ship
 -- from" a permanent, queryable fact -- see the order_fulfilment view in
 -- Section 10.
+-- SECURITY DEFINER: this trigger fires on order_item and must still be able
+-- to update `inventory` and `shipment_status` even for a caller (e.g. the
+-- anon guest-checkout path) that has no direct write policy on either.
 CREATE OR REPLACE FUNCTION reduce_inventory()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_warehouse_id    INT;
     v_hub_name        VARCHAR;
@@ -776,15 +798,22 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_reduce_inventory
 AFTER INSERT ON order_item
 FOR EACH ROW EXECUTE FUNCTION reduce_inventory();
 
 
+-- SECURITY DEFINER: fires on purchase_item so a Purchasing Officer's insert
+-- can still write into `inventory`, a table their role has no direct
+-- write policy on (only the trigger path is allowed to touch it).
 CREATE OR REPLACE FUNCTION increase_inventory()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_warehouse_id INT;
 BEGIN
@@ -799,7 +828,7 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_increase_inventory
 AFTER INSERT ON purchase_item
@@ -839,8 +868,14 @@ FOR EACH ROW EXECUTE FUNCTION check_purchase_supplier_match();
 -- Deleting a purchase whose stock has already been sold will fail
 -- (inventory's quantity >= 0 CHECK stops it going negative), same
 -- protective behavior as reduce_inventory() on the sales side.
+-- SECURITY DEFINER: fires on purchase deletion so it can still write into
+-- `inventory` regardless of the deleting role's own write policy.
 CREATE OR REPLACE FUNCTION reverse_inventory_on_purchase_delete()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     item RECORD;
 BEGIN
@@ -852,7 +887,7 @@ BEGIN
 
     RETURN OLD;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_reverse_inventory_on_purchase_delete
 BEFORE DELETE ON purchase
@@ -992,8 +1027,15 @@ FOR EACH ROW EXECUTE FUNCTION generate_tracking_code();
 -- order automatically enters the fulfillment pipeline, and
 -- trg_generate_tracking_code (above) tags it with a TRK<id> code as
 -- soon as it's created.
+-- SECURITY DEFINER: fires on order creation (including from the anon guest-
+-- checkout path) and must still be able to write `shipment`/`shipment_status`,
+-- neither of which has an anon or guest write policy.
 CREATE OR REPLACE FUNCTION create_shipment_for_order()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_shipment_id INT;
 BEGIN
@@ -1006,7 +1048,7 @@ BEGIN
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE TRIGGER trg_create_shipment_on_order
 AFTER INSERT ON "order"
@@ -1038,15 +1080,28 @@ $$ LANGUAGE plpgsql;
 -- Usage: SELECT campaign_revenue(1);
 
 -- 7.2 Low-stock products (quantity below a threshold)
+-- LEFT JOIN from product (not an INNER JOIN starting from inventory) so a
+-- product that has never been purchased into any warehouse -- and so has
+-- NO inventory row at all, not even a zero one -- still shows up here as
+-- 0 units, instead of silently vanishing from the report. Reports one row
+-- per (product, warehouse) rather than one row per product, so a manager
+-- can see exactly which hub needs restocking, not just that "the product"
+-- is low somewhere.
 CREATE OR REPLACE FUNCTION low_stock_products(p_threshold INT DEFAULT 10)
-RETURNS TABLE(product_id INT, product_name VARCHAR, quantity INT) AS $$
+RETURNS TABLE(product_id INT, product_name VARCHAR, warehouse_id INT, warehouse_name VARCHAR, quantity INT) AS $$
 BEGIN
     RETURN QUERY
-    SELECT p.product_id, p.name, i.quantity
-    FROM inventory i
-    JOIN product p ON p.product_id = i.product_id
-    WHERE i.quantity < p_threshold
-    ORDER BY i.quantity ASC;
+    SELECT
+        p.product_id,
+        p.name,
+        w.warehouse_id,
+        COALESCE(w.name, 'Not stocked in any warehouse'),
+        COALESCE(i.quantity, 0)
+    FROM product p
+    LEFT JOIN inventory i ON i.product_id = p.product_id
+    LEFT JOIN warehouse w ON w.warehouse_id = i.warehouse_id
+    WHERE COALESCE(i.quantity, 0) < p_threshold
+    ORDER BY quantity ASC;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -1098,13 +1153,22 @@ $$;
 -- order_id) which the frontend needs to show a confirmation. This does
 -- the same job as place_order() above -- keep the procedure for SQL
 -- Editor demos/viva, use this function from the website.
+-- SECURITY DEFINER: this is the public guest-checkout path (anon key), so it
+-- must bypass RLS to write "order"/order_item/order_attribution. No role
+-- check inside on purpose -- it's intentionally open to anon AND staff; see
+-- Section 11 for the accepted trade-offs of that (fake orders, spoofable
+-- customer_id/tracking_link_id) for an academic demo.
 CREATE OR REPLACE FUNCTION place_order_api(
     p_customer_id INT,
     p_tracking_link_id INT,
     p_product_id INT,
     p_quantity INT
 )
-RETURNS INT AS $$
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_order_id INT;
     v_price NUMERIC;
@@ -1125,7 +1189,7 @@ BEGIN
 
     RETURN v_order_id;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 -- Usage from frontend: supabase.rpc('place_order_api', { p_customer_id: 1, ... })
 
@@ -1157,6 +1221,9 @@ $$;
 
 -- Usage: CALL place_purchase(1, 1, 1, 500, 12.50);
 
+-- SECURITY DEFINER: must bypass RLS to write purchase/purchase_item across
+-- roles that don't have a direct write policy on those tables. The explicit
+-- role check below is the ONLY access control left once RLS is bypassed.
 CREATE OR REPLACE FUNCTION place_purchase_api(
     p_supplier_id INT,
     p_warehouse_id INT,
@@ -1164,10 +1231,18 @@ CREATE OR REPLACE FUNCTION place_purchase_api(
     p_quantity INT,
     p_unit_cost NUMERIC
 )
-RETURNS INT AS $$
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_purchase_id INT;
 BEGIN
+    IF current_staff_role() NOT IN ('purchasing','admin') THEN
+        RAISE EXCEPTION 'Only Purchasing Officers or Admins can record a purchase';
+    END IF;
+
     INSERT INTO purchase(supplier_id, warehouse_id)
     VALUES (p_supplier_id, p_warehouse_id)
     RETURNING purchase_id INTO v_purchase_id;
@@ -1177,7 +1252,7 @@ BEGIN
 
     RETURN v_purchase_id;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 -- Usage from frontend: supabase.rpc('place_purchase_api', { p_supplier_id: 1, ... })
 
@@ -1203,19 +1278,30 @@ $$ LANGUAGE plpgsql;
 --   pallet to the next hub and back.
 --
 -- Returns the number of units moved.
+-- SECURITY DEFINER: must bypass RLS to write stock_transfer/inventory across
+-- roles that don't have a direct write policy on those tables. The explicit
+-- role check below is the ONLY access control left once RLS is bypassed.
 CREATE OR REPLACE FUNCTION transfer_stock_api(
     p_product_id        INT,
     p_from_warehouse_id INT,
     p_to_warehouse_id   INT,
     p_quantity          INT
 )
-RETURNS INT AS $$
+RETURNS INT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
     v_source_qty INT;
     v_remaining  INT := p_quantity;
     v_take       INT;
     lot          RECORD;
 BEGIN
+    IF current_staff_role() NOT IN ('warehouse','admin') THEN
+        RAISE EXCEPTION 'Only Warehouse Managers or Admins can transfer stock';
+    END IF;
+
     IF p_quantity IS NULL OR p_quantity <= 0 THEN
         RAISE EXCEPTION 'Transfer quantity must be greater than zero';
     END IF;
@@ -1281,7 +1367,7 @@ BEGIN
 
     RETURN p_quantity;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 -- Usage from frontend: supabase.rpc('transfer_stock_api',
 --     { p_product_id: 1, p_from_warehouse_id: 1, p_to_warehouse_id: 2, p_quantity: 5 })
@@ -1331,35 +1417,58 @@ $$ LANGUAGE plpgsql;
 -- =========================================================
 
 -- Which campaign generated the most orders / revenue?
+-- Clicks and revenue are pre-aggregated per tracking link before being
+-- joined, so a link with multiple clicks and an attributed order does not
+-- multiply the order's revenue by the click count.
 CREATE OR REPLACE VIEW campaign_performance AS
 SELECT
     c.campaign_id,
     c.campaign_name,
     tl.platform,
-    COUNT(DISTINCT cl.click_id) AS total_clicks,
-    COUNT(DISTINCT oa.order_id) AS total_orders,
-    COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS total_revenue
+    COALESCE(SUM(link_clicks.total_clicks), 0)::bigint AS total_clicks,
+    COALESCE(SUM(link_orders.total_orders), 0)::bigint AS total_orders,
+    COALESCE(SUM(link_orders.total_revenue), 0) AS total_revenue
 FROM campaign c
 LEFT JOIN tracking_link tl ON tl.campaign_id = c.campaign_id
-LEFT JOIN click cl ON cl.link_id = tl.link_id
-LEFT JOIN order_attribution oa ON oa.link_id = tl.link_id
-LEFT JOIN order_item oi ON oi.order_id = oa.order_id
+LEFT JOIN (
+    SELECT link_id, COUNT(*) AS total_clicks
+    FROM click
+    GROUP BY link_id
+) link_clicks ON link_clicks.link_id = tl.link_id
+LEFT JOIN (
+    SELECT oa.link_id,
+           COUNT(DISTINCT oa.order_id) AS total_orders,
+           SUM(oi.quantity * oi.unit_price) AS total_revenue
+    FROM order_attribution oa
+    JOIN order_item oi ON oi.order_id = oa.order_id
+    GROUP BY oa.link_id
+) link_orders ON link_orders.link_id = tl.link_id
 GROUP BY c.campaign_id, c.campaign_name, tl.platform
-ORDER BY total_revenue DESC;
+ORDER BY total_revenue DESC NULLS LAST;
 
 -- Which platform performs best overall?
 CREATE OR REPLACE VIEW platform_performance AS
 SELECT
     tl.platform,
-    COUNT(DISTINCT cl.click_id) AS total_clicks,
-    COUNT(DISTINCT oa.order_id) AS total_orders,
-    COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS total_revenue
+    COALESCE(SUM(link_clicks.total_clicks), 0)::bigint AS total_clicks,
+    COALESCE(SUM(link_orders.total_orders), 0)::bigint AS total_orders,
+    COALESCE(SUM(link_orders.total_revenue), 0) AS total_revenue
 FROM tracking_link tl
-LEFT JOIN click cl ON cl.link_id = tl.link_id
-LEFT JOIN order_attribution oa ON oa.link_id = tl.link_id
-LEFT JOIN order_item oi ON oi.order_id = oa.order_id
+LEFT JOIN (
+    SELECT link_id, COUNT(*) AS total_clicks
+    FROM click
+    GROUP BY link_id
+) link_clicks ON link_clicks.link_id = tl.link_id
+LEFT JOIN (
+    SELECT oa.link_id,
+           COUNT(DISTINCT oa.order_id) AS total_orders,
+           SUM(oi.quantity * oi.unit_price) AS total_revenue
+    FROM order_attribution oa
+    JOIN order_item oi ON oi.order_id = oa.order_id
+    GROUP BY oa.link_id
+) link_orders ON link_orders.link_id = tl.link_id
 GROUP BY tl.platform
-ORDER BY total_revenue DESC;
+ORDER BY total_revenue DESC NULLS LAST;
 
 -- Which supplier provides the most products?
 CREATE OR REPLACE VIEW supplier_product_count AS
@@ -1424,35 +1533,280 @@ ORDER BY o.order_date DESC;
 -- Usage: SELECT * FROM order_fulfilment WHERE source_warehouse_id = 1;
 
 -- =========================================================
--- SECTION 11: ACCESS FOR THE FRONTEND (DEMO SETTING ONLY)
+-- SECTION 11: STAFF AUTHENTICATION + ROW LEVEL SECURITY
 -- =========================================================
--- Supabase enables Row Level Security by default on some setups, which
--- BLOCKS all API access until you write policies. For a closed academic
--- demo project (no real customers, no sensitive data), the simplest
--- correct choice is to disable RLS so your frontend can read/write
--- through the auto-generated API.
+-- A fresh install of this file now ends in a fully secured state: real
+-- Supabase Auth accounts, and RLS enabled with real role-based policies on
+-- every business table -- not left wide open behind the anon key.
 --
--- IMPORTANT: this is fine for a course project. It would NOT be fine for
--- a real production app with real user data -- mention this trade-off
--- explicitly in your report as a known simplification.
+-- An older copy of this file used to end here with
+-- `ALTER TABLE ... DISABLE ROW LEVEL SECURITY` on every business table, as
+-- a "get the demo running" shortcut, and this section's content used to
+-- live in three separate follow-up migrations:
+--   1. migration_add_staff_auth.sql
+--   2. migration_add_business_table_rls.sql
+--   3. migration_secure_analytics_views.sql
+-- Everything below is that same content, merged in so a brand-new project
+-- only needs this one file and there's no run-order to get wrong.
+--
+-- If you are instead working against an ALREADY-DEPLOYED project that was
+-- created from that older copy of schema.sql, do NOT re-run this whole
+-- file -- run the three migrations above against it instead (they're kept
+-- in the repo for exactly this).
 
-ALTER TABLE supplier        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE product         DISABLE ROW LEVEL SECURITY;
-ALTER TABLE warehouse       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE inventory       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE stock_transfer  DISABLE ROW LEVEL SECURITY;
-ALTER TABLE customer        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE "order"          DISABLE ROW LEVEL SECURITY;
-ALTER TABLE order_item       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE campaign         DISABLE ROW LEVEL SECURITY;
-ALTER TABLE tracking_link    DISABLE ROW LEVEL SECURITY;
-ALTER TABLE order_attribution DISABLE ROW LEVEL SECURITY;
-ALTER TABLE click             DISABLE ROW LEVEL SECURITY;
-ALTER TABLE shipment        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE shipment_status DISABLE ROW LEVEL SECURITY;
-ALTER TABLE audit_log       DISABLE ROW LEVEL SECURITY;
-ALTER TABLE purchase        DISABLE ROW LEVEL SECURITY;
-ALTER TABLE purchase_item   DISABLE ROW LEVEL SECURITY;
+-- ---------------------------------------------------------
+-- 11.1: STAFF AUTHENTICATION (staff_profiles + current_staff_role())
+-- ---------------------------------------------------------
+-- Real Supabase Auth accounts (real email + hashed password). Staff no
+-- longer self-select a role at login -- an admin creates their account
+-- (via the in-app Staff Management page, backed by the admin-manage-staff
+-- edge function) and assigns the role at that point.
+
+CREATE TABLE IF NOT EXISTS public.staff_profiles (
+    id          UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email       TEXT NOT NULL,
+    full_name   TEXT NOT NULL,
+    role        TEXT NOT NULL CHECK (role IN ('admin', 'purchasing', 'marketing', 'warehouse', 'shipment')),
+    is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by  UUID REFERENCES auth.users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Lets a logged-in user (and RLS policies below) find their own role
+-- without re-querying staff_profiles directly -- SECURITY DEFINER so it
+-- can read the table even though the row-level policies below would
+-- otherwise only let a user see their own row.
+CREATE OR REPLACE FUNCTION public.current_staff_role()
+RETURNS TEXT
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+STABLE
+AS $$
+    SELECT role FROM staff_profiles
+    WHERE id = auth.uid() AND is_active = TRUE
+    LIMIT 1;
+$$;
+
+ALTER TABLE public.staff_profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS staff_read_own ON public.staff_profiles;
+CREATE POLICY staff_read_own ON public.staff_profiles
+    FOR SELECT
+    USING (id = auth.uid());
+
+DROP POLICY IF EXISTS staff_read_all_if_admin ON public.staff_profiles;
+CREATE POLICY staff_read_all_if_admin ON public.staff_profiles
+    FOR SELECT
+    USING (public.current_staff_role() = 'admin');
+
+-- No INSERT/UPDATE/DELETE policies on purpose: those only ever happen
+-- through the admin-manage-staff edge function, which uses the service
+-- role key (bypasses RLS entirely) after verifying the caller is an
+-- active admin. The anon/authenticated client can never write this
+-- table directly, even if it belongs to an admin's browser session.
+
+-- Bootstrap the first admin manually, once, per environment:
+--   1. Supabase Dashboard -> Authentication -> Users -> Add User.
+--      Create yourself with a real email + password, "Auto Confirm User" on.
+--   2. Copy that user's UUID from the Users table, then run:
+--      INSERT INTO public.staff_profiles (id, email, full_name, role, is_active)
+--      VALUES ('<paste-the-uuid-here>', '<same-email>', '<your-name>', 'admin', TRUE);
+-- Every other staff account from here on is created through the app's
+-- Staff Management page (admin-only), never manually.
+
+
+-- ---------------------------------------------------------
+-- 11.2: ENABLE ROW LEVEL SECURITY ON EVERY BUSINESS TABLE
+-- ---------------------------------------------------------
+
+ALTER TABLE supplier          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouse         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_transfer    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE customer          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "order"           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE order_item        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE campaign          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tracking_link     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE order_attribution ENABLE ROW LEVEL SECURITY;
+ALTER TABLE click             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shipment          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shipment_status   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE purchase_item     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log         ENABLE ROW LEVEL SECURITY;
+
+
+-- ---------------------------------------------------------
+-- 11.3: STAFF-WIDE READ ACCESS
+-- ---------------------------------------------------------
+-- SELECT is staff-wide: any active staff member, of ANY role, can read
+-- every internal table -- required because pages like Orders (visible to
+-- "shipment") still join in product/customer names even though those
+-- modules aren't in that role's own allowed pages. audit_log is the one
+-- exception -- SELECT is admin-only.
+
+DROP POLICY IF EXISTS staff_select_all ON supplier;
+CREATE POLICY staff_select_all ON supplier          FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON product;
+CREATE POLICY staff_select_all ON product            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON warehouse;
+CREATE POLICY staff_select_all ON warehouse           FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON inventory;
+CREATE POLICY staff_select_all ON inventory           FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON stock_transfer;
+CREATE POLICY staff_select_all ON stock_transfer      FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON customer;
+CREATE POLICY staff_select_all ON customer            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON "order";
+CREATE POLICY staff_select_all ON "order"             FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON order_item;
+CREATE POLICY staff_select_all ON order_item          FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON campaign;
+CREATE POLICY staff_select_all ON campaign            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON tracking_link;
+CREATE POLICY staff_select_all ON tracking_link       FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON order_attribution;
+CREATE POLICY staff_select_all ON order_attribution   FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON click;
+CREATE POLICY staff_select_all ON click               FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON shipment;
+CREATE POLICY staff_select_all ON shipment            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON shipment_status;
+CREATE POLICY staff_select_all ON shipment_status     FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON purchase;
+CREATE POLICY staff_select_all ON purchase            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON purchase_item;
+CREATE POLICY staff_select_all ON purchase_item       FOR SELECT USING (current_staff_role() IS NOT NULL);
+
+DROP POLICY IF EXISTS admin_select_audit_log ON audit_log;
+CREATE POLICY admin_select_audit_log ON audit_log
+    FOR SELECT USING (current_staff_role() = 'admin');
+
+
+-- ---------------------------------------------------------
+-- 11.4: PUBLIC STOREFRONT (no login) READ + WRITE ACCESS
+-- ---------------------------------------------------------
+-- Scoped to exactly what frontend/storefront/*.html reads/writes today.
+-- NOTE: this is broader than a real production system should allow (any
+-- anon caller can read all products/inventory/tracking links/customers/
+-- shipments, not just their own) -- acceptable for a closed academic demo,
+-- not for a real deployment with real customer data.
+
+-- product.html: browse the catalog + see stock
+DROP POLICY IF EXISTS anon_select_product ON product;
+CREATE POLICY anon_select_product   ON product   FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_inventory ON inventory;
+CREATE POLICY anon_select_inventory ON inventory FOR SELECT TO anon USING (true);
+
+-- redirect.html: resolve a tracking link, log a click
+DROP POLICY IF EXISTS anon_select_tracking_link ON tracking_link;
+CREATE POLICY anon_select_tracking_link ON tracking_link FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_campaign ON campaign;
+CREATE POLICY anon_select_campaign      ON campaign      FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_insert_click ON click;
+CREATE POLICY anon_insert_click         ON click         FOR INSERT TO anon WITH CHECK (true);
+
+-- product.html guest checkout: look up or create a customer by phone
+DROP POLICY IF EXISTS anon_select_customer ON customer;
+CREATE POLICY anon_select_customer ON customer FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_insert_customer ON customer;
+CREATE POLICY anon_insert_customer ON customer FOR INSERT TO anon WITH CHECK (true);
+
+-- track.html: look up a shipment by its TRK code
+DROP POLICY IF EXISTS anon_select_shipment ON shipment;
+CREATE POLICY anon_select_shipment        ON shipment        FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_shipment_status ON shipment_status;
+CREATE POLICY anon_select_shipment_status ON shipment_status FOR SELECT TO anon USING (true);
+
+
+-- ---------------------------------------------------------
+-- 11.5: ROLE-SCOPED WRITE ACCESS (the actual access control)
+-- ---------------------------------------------------------
+-- | Table                        | Direct write from                  | Roles allowed        |
+-- |-------------------------------|------------------------------------|----------------------|
+-- | supplier                      | suppliers/index.html               | purchasing, admin    |
+-- | product                       | suppliers/, products/index.html    | purchasing, warehouse, admin |
+-- | warehouse                     | warehouses/index.html              | warehouse, admin     |
+-- | customer (staff side)         | customers/index.html               | marketing, admin     |
+-- | purchase (delete only)        | purchases/index.html               | purchasing, admin    |
+-- | shipment_status (insert only) | shipments/index.html               | shipment, admin      |
+-- | campaign, tracking_link       | campaigns/index.html                | marketing, admin     |
+-- stock_transfer / "order" / order_item / purchase_item / inventory /
+-- audit_log get NO client-facing write policy here on purpose -- every
+-- write to those happens only through the SECURITY DEFINER functions and
+-- triggers defined earlier in this file, which bypass RLS for their own
+-- internal writes.
+
+DROP POLICY IF EXISTS role_write_supplier ON supplier;
+CREATE POLICY role_write_supplier ON supplier
+    FOR ALL
+    USING       (current_staff_role() IN ('purchasing','admin'))
+    WITH CHECK  (current_staff_role() IN ('purchasing','admin'));
+
+DROP POLICY IF EXISTS role_write_product ON product;
+CREATE POLICY role_write_product ON product
+    FOR ALL
+    USING       (current_staff_role() IN ('purchasing','warehouse','admin'))
+    WITH CHECK  (current_staff_role() IN ('purchasing','warehouse','admin'));
+
+DROP POLICY IF EXISTS role_write_warehouse ON warehouse;
+CREATE POLICY role_write_warehouse ON warehouse
+    FOR ALL
+    USING       (current_staff_role() IN ('warehouse','admin'))
+    WITH CHECK  (current_staff_role() IN ('warehouse','admin'));
+
+DROP POLICY IF EXISTS role_write_customer ON customer;
+CREATE POLICY role_write_customer ON customer
+    FOR ALL
+    USING       (current_staff_role() IN ('marketing','admin'))
+    WITH CHECK  (current_staff_role() IN ('marketing','admin'));
+
+DROP POLICY IF EXISTS role_delete_purchase ON purchase;
+CREATE POLICY role_delete_purchase ON purchase
+    FOR DELETE
+    USING (current_staff_role() IN ('purchasing','admin'));
+
+DROP POLICY IF EXISTS role_insert_shipment_status ON shipment_status;
+CREATE POLICY role_insert_shipment_status ON shipment_status
+    FOR INSERT
+    WITH CHECK (current_staff_role() IN ('shipment','admin'));
+
+DROP POLICY IF EXISTS role_write_campaign ON campaign;
+CREATE POLICY role_write_campaign ON campaign
+    FOR ALL
+    USING       (current_staff_role() IN ('marketing','admin'))
+    WITH CHECK  (current_staff_role() IN ('marketing','admin'));
+
+DROP POLICY IF EXISTS role_write_tracking_link ON tracking_link;
+CREATE POLICY role_write_tracking_link ON tracking_link
+    FOR ALL
+    USING       (current_staff_role() IN ('marketing','admin'))
+    WITH CHECK  (current_staff_role() IN ('marketing','admin'));
+
+
+-- ---------------------------------------------------------
+-- 11.6: ANALYTICS VIEWS RESPECT THE CALLER'S RLS, NOT THE OWNER'S
+-- ---------------------------------------------------------
+-- Views created by the default project owner are SECURITY DEFINER by
+-- default -- a caller reads them using the owner's access, bypassing the
+-- RLS policies above entirely. security_invoker = true makes each view
+-- use the querying user's own table privileges and RLS policies instead.
+-- All internal pages that use these views already require an active staff
+-- account, so their normal queries continue to work; anonymous storefront
+-- pages do not use any of these views.
+
+ALTER VIEW public.warehouse_capacity     SET (security_invoker = true);
+ALTER VIEW public.campaign_performance   SET (security_invoker = true);
+ALTER VIEW public.platform_performance   SET (security_invoker = true);
+ALTER VIEW public.supplier_product_count SET (security_invoker = true);
+ALTER VIEW public.purchase_history       SET (security_invoker = true);
+ALTER VIEW public.warehouse_stock_age    SET (security_invoker = true);
+ALTER VIEW public.warehouse_rent         SET (security_invoker = true);
+ALTER VIEW public.warehouse_overview     SET (security_invoker = true);
+ALTER VIEW public.order_fulfilment       SET (security_invoker = true);
 
 -- =========================================================
 -- END OF SCHEMA
