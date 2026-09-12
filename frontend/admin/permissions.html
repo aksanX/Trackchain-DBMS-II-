@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrackChain — Access Control & Role Permissions</title>
+<link rel="stylesheet" href="/css/style.css">
+<style>
+.matrix-card {
+    margin-bottom: 24px;
+}
+
+.matrix-table-container {
+    overflow-x: auto;
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    background: #ffffff;
+}
+
+.matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+}
+
+.matrix-table th, .matrix-table td {
+    padding: 12px 14px;
+    text-align: center;
+    border-bottom: 1px solid #f1f5f9;
+    border-right: 1px solid #f1f5f9;
+}
+
+.matrix-table th:first-child, .matrix-table td:first-child {
+    text-align: left;
+    font-weight: 700;
+    min-width: 180px;
+    background: #f8fafc;
+}
+
+.matrix-table th {
+    background: #f1f5f9;
+    color: var(--text-primary);
+    font-weight: 700;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.matrix-checkbox {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: #2563eb;
+}
+
+.admin-full-badge {
+    background: #dbeafe;
+    color: #1e40af;
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.matrix-actions-bar {
+    display: flex;
+    gap: 12px;
+    margin-top: 18px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.success-alert-toast {
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+    padding: 10px 16px;
+    border-radius: 12px;
+    font-size: 13.5px;
+    font-weight: 600;
+    display: none;
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+    <aside class="sidebar" id="sidebar-mount"></aside>
+    <div class="shell-main">
+        <header class="shell-header">
+            <div>
+                <h1>Access Control & Role Permissions Matrix</h1>
+                <p>Configure which modules each staff role can access in real-time.</p>
+            </div>
+            <div id="role-selector-mount"></div>
+        </header>
+
+        <main class="shell-content">
+
+            <div id="save-toast" class="success-alert-toast">
+                Permission matrix updated successfully! Changes take effect immediately across all staff sessions.
+            </div>
+
+            <!-- Permission Matrix Section -->
+            <div class="card full-width matrix-card">
+                <h2>Role Access Permission Matrix</h2>
+                <p style="font-size:13.5px; color: var(--text-secondary); margin-bottom: 16px;">
+                    Check or uncheck modules to customize role permissions. Admins retain full system access at all times.
+                </p>
+
+                <div class="matrix-table-container">
+                    <table class="matrix-table" id="permissions-matrix-table">
+                        <thead>
+                            <tr id="matrix-header-row">
+                                <th>Role / Module</th>
+                                <!-- Module headers will be generated dynamically -->
+                            </tr>
+                        </thead>
+                        <tbody id="matrix-tbody">
+                            <!-- Matrix rows will be generated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="matrix-actions-bar">
+                    <button type="button" class="btn primary" onclick="saveMatrixChanges()">
+                        Save Permission Matrix
+                    </button>
+                    <button type="button" class="btn-ghost btn-danger" onclick="resetDefaultMatrix()">
+                        Reset to Default Policy
+                    </button>
+                </div>
+            </div>
+
+            <!-- Staff Accounts Section -->
+            <div class="card full-width">
+                <h2>Staff Accounts & Access Management</h2>
+                <div class="toolbar" style="margin-bottom:16px;">
+                    <p style="font-size:13.5px; color: var(--text-secondary); margin:0;">
+                        Manage active staff user accounts and create new login credentials.
+                    </p>
+                </div>
+
+                <div class="table-responsive">
+                    <table id="staff-table">
+                        <thead>
+                            <tr>
+                                <th>Staff Name</th>
+                                <th>Username</th>
+                                <th>Assigned Role</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="staff-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Create Staff Form -->
+            <div class="card full-width">
+                <h2>Create New Staff Member</h2>
+                <form id="create-staff-form">
+                    <div class="form-row three-col">
+                        <div>
+                            <label for="staff-name-input">Full Name</label>
+                            <input type="text" id="staff-name-input" placeholder="e.g. John Miller" required>
+                        </div>
+                        <div>
+                            <label for="staff-username-input">Username</label>
+                            <input type="text" id="staff-username-input" placeholder="e.g. john_miller" required>
+                        </div>
+                        <div>
+                            <label for="staff-pass-input">Password</label>
+                            <input type="password" id="staff-pass-input" placeholder="Password" required>
+                        </div>
+                    </div>
+                    <div class="form-row two-col" style="margin-top:12px;">
+                        <div>
+                            <label for="staff-role-select">Assign Role</label>
+                            <select id="staff-role-select" required>
+                                <option value="admin">Admin</option>
+                                <option value="purchasing">Purchasing Officer</option>
+                                <option value="marketing">Marketing Manager</option>
+                                <option value="warehouse">Warehouse Manager</option>
+                                <option value="shipment">Shipment Manager</option>
+                            </select>
+                        </div>
+                        <div style="display:flex; align-items:flex-end;">
+                            <button type="submit" class="btn primary" style="width:100%;">Create Staff Account</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/role-guard.js"></script>
+<script src="/js/sidebar.js"></script>
+<script src="/js/ui-helpers.js"></script>
+<script>
+renderUserHeaderProfile();
+if (checkPageAccess("permissions")) {
+    renderSidebar("permissions");
+}
+
+const MODULES = ALL_MODULE_KEYS.filter(m => m.key !== "permissions" && m.key !== "dashboard");
+
+function renderMatrix() {
+    const matrix = getRolePermissionsMatrix();
+    const headerRow = document.getElementById("matrix-header-row");
+    const tbody = document.getElementById("matrix-tbody");
+
+    headerRow.innerHTML = `<th>Role / Module</th>` + MODULES.map(m => `<th>${m.label}</th>`).join("");
+
+    const roleKeys = Object.keys(ROLES);
+
+    tbody.innerHTML = roleKeys.map(roleId => {
+        const roleObj = ROLES[roleId];
+
+        if (roleId === "admin") {
+            const adminCells = MODULES.map(() => `<td><span class="admin-full-badge">Full</span></td>`).join("");
+            return `
+                <tr>
+                    <td>${roleObj.label}</td>
+                    ${adminCells}
+                </tr>
+            `;
+        }
+
+        const allowedKeys = matrix[roleId] || [];
+
+        const moduleCells = MODULES.map(m => {
+            const checked = allowedKeys.includes(m.key) ? "checked" : "";
+            return `
+                <td>
+                    <input type="checkbox" class="matrix-checkbox" data-role="${roleId}" data-module="${m.key}" ${checked}>
+                </td>
+            `;
+        }).join("");
+
+        return `
+            <tr>
+                <td>${roleObj.label}</td>
+                ${moduleCells}
+            </tr>
+        `;
+    }).join("");
+}
+
+function saveMatrixChanges() {
+    const matrix = getRolePermissionsMatrix();
+    const checkboxes = document.querySelectorAll(".matrix-checkbox");
+
+    const newMatrix = {
+        purchasing: [],
+        marketing: [],
+        warehouse: [],
+        shipment: []
+    };
+
+    checkboxes.forEach(cb => {
+        const role = cb.dataset.role;
+        const mod = cb.dataset.module;
+        if (cb.checked) {
+            if (!newMatrix[role]) newMatrix[role] = [];
+            newMatrix[role].push(mod);
+        }
+    });
+
+    // Ensure dashboard is always accessible
+    Object.keys(newMatrix).forEach(r => {
+        if (!newMatrix[r].includes("dashboard")) {
+            newMatrix[r].unshift("dashboard");
+        }
+    });
+
+    saveRolePermissionsMatrix(newMatrix);
+
+    const toast = document.getElementById("save-toast");
+    toast.style.display = "block";
+    setTimeout(() => { toast.style.display = "none"; }, 3500);
+}
+
+function resetDefaultMatrix() {
+    if (confirm("Reset permission matrix back to default system settings?")) {
+        resetPermissionsMatrix();
+        renderMatrix();
+    }
+}
+
+function renderStaffTable() {
+    const accounts = getStaffAccounts();
+    const tbody = document.getElementById("staff-tbody");
+
+    tbody.innerHTML = accounts.map(acc => {
+        const roleObj = ROLES[acc.roleId] || { label: acc.roleId };
+        const statusBadge = acc.active 
+            ? `<span class="badge success">Active</span>`
+            : `<span class="badge danger">Deactivated</span>`;
+        const toggleBtnText = acc.active ? "Deactivate" : "Activate";
+
+        return `
+            <tr>
+                <td><strong>${escapeHtml(acc.name)}</strong></td>
+                <td><code>${escapeHtml(acc.username)}</code></td>
+                <td>${roleObj.label}</td>
+                <td>${statusBadge}</td>
+                <td>
+                    <button type="button" class="btn-ghost btn-small" onclick="handleToggleStatus('${escapeHtml(acc.username)}')">
+                        ${toggleBtnText}
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join("");
+}
+
+function handleToggleStatus(username) {
+    toggleStaffAccountStatus(username);
+    renderStaffTable();
+}
+
+document.getElementById("create-staff-form").addEventListener("submit", function(e) {
+    e.preventDefault();
+    const name = document.getElementById("staff-name-input").value;
+    const user = document.getElementById("staff-username-input").value;
+    const pass = document.getElementById("staff-pass-input").value;
+    const role = document.getElementById("staff-role-select").value;
+
+    const res = createStaffAccount(user, pass, name, role);
+    if (res.success) {
+        alert(`Staff account '${name}' created successfully!`);
+        this.reset();
+        renderStaffTable();
+    } else {
+        alert(res.message);
+    }
+});
+
+renderMatrix();
+renderStaffTable();
+</script>
+
+</body>
+</html>
