@@ -222,30 +222,6 @@ CREATE TABLE click (
     customer_id INT REFERENCES customer(customer_id)
 );
 
--- A campaign with no start_date/end_date is always active (both NULL means
--- no restriction was ever set). Otherwise a campaign is only active on days
--- from its start_date through its end_date, inclusive.
---
--- A click itself is NEVER blocked by this -- every visit that actually
--- happens is real traffic and gets logged unconditionally, active campaign
--- or not (a real ad platform still counts a click on a link even after the
--- campaign's official end date). is_campaign_active() is used only at the
--- ORDER side (place_order_api, Section 8.1): an order always succeeds
--- regardless of campaign status, it just isn't credited to an expired/
--- not-yet-started campaign's performance numbers.
-CREATE OR REPLACE FUNCTION is_campaign_active(p_campaign_id INT)
-RETURNS BOOLEAN AS $$
-DECLARE
-    v_start DATE;
-    v_end   DATE;
-BEGIN
-    SELECT start_date, end_date INTO v_start, v_end FROM campaign WHERE campaign_id = p_campaign_id;
-    RETURN (v_start IS NULL OR v_start <= CURRENT_DATE)
-       AND (v_end   IS NULL OR v_end   >= CURRENT_DATE);
-END;
-$$ LANGUAGE plpgsql STABLE SET search_path = public;
-
-
 -- =========================================================
 -- SECTION 4: SHIPMENT TRACKING
 -- =========================================================
@@ -1425,9 +1401,8 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_order_id    INT;
-    v_price       NUMERIC;
-    v_campaign_id INT;
+    v_order_id INT;
+    v_price    NUMERIC;
 BEGIN
     SELECT price INTO v_price FROM product WHERE product_id = p_product_id;
 
@@ -1438,19 +1413,9 @@ BEGIN
     INSERT INTO order_item(order_id, product_id, quantity, unit_price)
     VALUES (v_order_id, p_product_id, p_quantity, v_price);
 
-    -- An expired/not-yet-started campaign's link never blocks the SALE
-    -- itself (the customer already committed to buying, by the time this
-    -- runs) -- it just doesn't get credited with it. Same reasoning as
-    -- enforce_campaign_active_for_click() on the click side, applied
-    -- without risking the order: raising an exception here instead would
-    -- roll back the whole order over what is, from the customer's point of
-    -- view, an unrelated bookkeeping detail.
     IF p_tracking_link_id IS NOT NULL THEN
-        SELECT campaign_id INTO v_campaign_id FROM tracking_link WHERE link_id = p_tracking_link_id;
-        IF v_campaign_id IS NOT NULL AND is_campaign_active(v_campaign_id) THEN
-            INSERT INTO order_attribution(order_id, link_id)
-            VALUES (v_order_id, p_tracking_link_id);
-        END IF;
+        INSERT INTO order_attribution(order_id, link_id)
+        VALUES (v_order_id, p_tracking_link_id);
     END IF;
 
     RETURN v_order_id;
