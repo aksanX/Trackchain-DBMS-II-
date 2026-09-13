@@ -113,7 +113,7 @@ erDiagram
     }
     shipment {
         int shipment_id PK
-        int order_id FK UK "ON DELETE CASCADE"
+        int order_id FK,UK "ON DELETE CASCADE"
         varchar tracking_code UK "TRK-nnn by trigger"
         timestamp shipment_date
     }
