@@ -166,7 +166,7 @@ function renderUserHeaderProfile(mountId = "role-selector-mount") {
         <div class="user-header-profile">
             <div class="user-info-text">
                 <span class="user-name">${user.username}</span>
-                <span class="user-role-badge">${roleObj ? roleObj.icon : ""} ${roleObj ? roleObj.label : user.roleId}</span>
+                <span class="user-role-badge">${roleObj ? roleObj.label : user.roleId}</span>
             </div>
             <button type="button" class="btn-logout" onclick="logout()" title="Log out of session">
                 <span>🚪</span> Log Out
@@ -196,7 +196,7 @@ function renderAccessRestrictedPage(pageKey, activeRole) {
             <div class="card access-restricted-card">
                 <div class="access-restricted-icon">🔒</div>
                 <h2>Module Access Restricted</h2>
-                <p>Hello <strong>${user ? user.username : "User"}</strong>, your current role <strong>${roleObj.icon} ${roleObj.label}</strong> does not have permission to view or edit this module.</p>
+                <p>Hello <strong>${user ? user.username : "User"}</strong>, your current role <strong>${roleObj.label}</strong> does not have permission to view or edit this module.</p>
                 <p class="role-desc-sub">${roleObj.description}</p>
                 <div class="access-restricted-actions">
                     <p><strong>Available modules for your role:</strong></p>

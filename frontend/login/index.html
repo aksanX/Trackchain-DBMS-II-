@@ -11,80 +11,58 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: radial-gradient(circle at 10% 20%, rgba(220, 235, 252, 0.8) 0%, rgba(244, 243, 238, 0.95) 90%);
     padding: 32px 20px;
 }
 
-.login-portal-container {
+.login-form-wrap {
     width: 100%;
-    max-width: 440px;
-    margin: 0 auto;
+    max-width: 400px;
 }
 
-.login-portal-header {
-    text-align: center;
-    margin-bottom: 36px;
+.login-logo-mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 28px;
 }
 
-.brand-logo-badge {
-    width: 58px;
-    height: 58px;
-    background: #0f172a;
-    color: #ffffff;
-    border-radius: 18px;
-    display: inline-flex;
+.login-logo-mark .logo-mark {
+    width: 36px;
+    height: 36px;
+    background: var(--accent-gradient);
+    color: #fff;
+    border-radius: 10px;
+    display: flex;
     align-items: center;
     justify-content: center;
     font-family: 'Outfit', sans-serif;
-    font-size: 28px;
-    font-weight: 800;
-    margin-bottom: 12px;
-    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.2);
+    font-weight: 700;
 }
 
-.login-portal-header h1 {
-    font-size: 32px;
-    font-weight: 800;
+.login-logo-mark .brand-name {
     font-family: 'Outfit', sans-serif;
-    color: #0f172a;
-    margin-bottom: 8px;
-    letter-spacing: -0.5px;
-}
-
-.login-portal-header p {
-    color: #475569;
-    font-size: 16px;
-    font-weight: 500;
-    max-width: 620px;
-    margin: 0 auto;
-}
-
-.login-form-card {
-    background: #ffffff;
-    border: 2px solid #e2e8f0;
-    border-radius: 22px;
-    padding: 28px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+    font-weight: 700;
+    font-size: 18px;
 }
 
 .login-form-card h2 {
-    font-family: 'Outfit', sans-serif;
-    font-size: 22px;
-    font-weight: 700;
-    color: #0f172a;
+    font-size: 24px;
     margin-bottom: 4px;
+    text-align: center;
 }
 
 .login-form-card .subtitle {
     font-size: 14px;
-    color: #64748b;
+    color: var(--text-muted);
     margin-bottom: 20px;
+    text-align: center;
 }
 
 .login-error-alert {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    color: #991b1b;
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: var(--error);
     padding: 10px 14px;
     border-radius: 12px;
     font-size: 13.5px;
@@ -93,90 +71,39 @@ body {
     display: none;
 }
 
-.form-group-item {
-    margin-bottom: 16px;
-}
-
-.form-group-item label {
-    display: block;
-    font-size: 14px;
-    font-weight: 700;
-    color: #1e293b;
-    margin-bottom: 6px;
-}
-
-.form-group-item input {
-    width: 100%;
-    padding: 12px 16px;
-    border-radius: 12px;
-    border: 1.5px solid #cbd5e1;
-    background: #f8fafc;
-    font-size: 15px;
-    font-weight: 500;
-    color: #0f172a;
-    outline: none;
-    transition: all 0.2s ease;
-}
-
-.form-group-item input:focus {
-    border-color: #2563eb;
-    background: #ffffff;
-    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-}
-
-.submit-login-btn {
-    width: 100%;
-    padding: 14px 20px;
-    border-radius: 14px;
-    border: none;
-    background: #0f172a;
-    color: #ffffff;
-    font-size: 15.5px;
-    font-weight: 700;
-    cursor: pointer;
-    transition: background 0.2s ease;
-    margin-top: 8px;
-}
-
-.submit-login-btn:hover { background: #2563eb; }
-.submit-login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.login-form-card button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .login-footnote {
     text-align: center;
-    font-size: 12.5px;
-    color: #94a3b8;
-    margin-top: 18px;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 20px;
 }
 </style>
 </head>
 <body>
 
-<div class="login-portal-container">
+<div class="login-form-wrap">
 
-    <div class="login-portal-header">
-        <div class="brand-logo-badge">S</div>
-        <h1>TrackChain Staff Portal</h1>
-        <p>Sign in with the email and password your admin set up for you.</p>
+    <div class="login-logo-mark">
+        <div class="logo-mark">S</div>
+        <span class="brand-name">TrackChain</span>
     </div>
 
-    <div class="login-form-card">
-        <h2>Sign In</h2>
+    <div class="card login-form-card">
+        <h2>Sign in</h2>
         <div class="subtitle">Enter your staff credentials to authenticate</div>
 
         <div id="login-error" class="login-error-alert"></div>
 
         <form id="login-form">
-            <div class="form-group-item">
-                <label for="email-input">Email</label>
-                <input type="email" id="email-input" placeholder="you@company.com" required autocomplete="username">
-            </div>
+            <label for="email-input">Email</label>
+            <input type="email" id="email-input" placeholder="you@company.com" required autocomplete="username">
 
-            <div class="form-group-item">
-                <label for="password-input">Password</label>
-                <input type="password" id="password-input" placeholder="••••••••" required autocomplete="current-password">
-            </div>
+            <label for="password-input">Password</label>
+            <input type="password" id="password-input" placeholder="••••••••" required autocomplete="current-password">
 
-            <button type="submit" id="submit-btn" class="submit-login-btn">Sign In to Dashboard →</button>
+            <button type="submit" id="submit-btn">Sign in to dashboard →</button>
         </form>
     </div>
 
@@ -221,7 +148,7 @@ document.getElementById("login-form").addEventListener("submit", async function 
         errorBox.style.display = "block";
     } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = "Sign In to Dashboard →";
+        submitBtn.textContent = "Sign in to dashboard →";
     }
 });
 </script>

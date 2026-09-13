@@ -32,11 +32,11 @@
                         <div>
                             <label for="staff-role">Role</label>
                             <select id="staff-role" required>
-                                <option value="admin">👑 Admin</option>
-                                <option value="purchasing">🧾 Purchasing Officer</option>
-                                <option value="marketing">📣 Marketing Manager</option>
-                                <option value="warehouse">🏬 Warehouse Manager</option>
-                                <option value="shipment">🚚 Shipment Manager</option>
+                                <option value="admin">Admin</option>
+                                <option value="purchasing">Purchasing Officer</option>
+                                <option value="marketing">Marketing Manager</option>
+                                <option value="warehouse">Warehouse Manager</option>
+                                <option value="shipment">Shipment Manager</option>
                             </select>
                         </div>
                     </div>
@@ -106,7 +106,7 @@ async function callStaffFunction(payload) {
 function roleBadge(roleId) {
     const roleObj = ROLES[roleId];
     if (!roleObj) return escapeHtml(roleId);
-    return `${roleObj.icon} ${roleObj.label}`;
+    return roleObj.label;
 }
 
 function renderStaffRows(rows) {

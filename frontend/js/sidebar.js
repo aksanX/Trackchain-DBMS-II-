@@ -112,7 +112,6 @@ function renderSidebar(activeKey) {
 
     const roleBadgeHtml = activeRoleObj ? `
         <div class="sidebar-role-badge">
-            <span class="role-badge-icon">${activeRoleObj.icon}</span>
             <span class="role-badge-name">${activeRoleObj.label}</span>
         </div>
     ` : "";

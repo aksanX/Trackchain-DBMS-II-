@@ -155,7 +155,7 @@
         const activeRole = user ? user.roleId : "admin";
         const subtitleEl = document.getElementById("dashboard-subtitle");
         if (subtitleEl && ROLES[activeRole]) {
-            subtitleEl.textContent = `${ROLES[activeRole].icon} ${ROLES[activeRole].label} Workspace — ${ROLES[activeRole].description}`;
+            subtitleEl.textContent = `${ROLES[activeRole].label} Workspace — ${ROLES[activeRole].description}`;
         }
     }
 })();
