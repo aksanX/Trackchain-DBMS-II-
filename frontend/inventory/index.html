@@ -65,7 +65,7 @@
                     <h2>Low stock <span class="card-subtitle" style="margin:0; display:inline;">&nbsp;&mdash;&nbsp;below 10 units</span></h2>
                     <div class="table-responsive">
                         <table id="low-stock-table">
-                            <thead><tr><th>Product</th><th>Quantity</th></tr></thead>
+                            <thead><tr><th>Product</th><th>Warehouse</th><th>Quantity</th></tr></thead>
                             <tbody></tbody>
                         </table>
                     </div>
@@ -147,12 +147,52 @@ async function loadStock() {
     document.getElementById("kpi-out").textContent = outOfStock;
 }
 
+// Computed client-side (not via the low_stock_products() DB function) so
+// this works against the live project without needing that function's
+// signature updated first. Mirrors the same LEFT JOIN logic: a product
+// with no inventory row anywhere still shows up as 0 units, instead of
+// silently vanishing the way an INNER JOIN starting from `inventory` would.
+const LOW_STOCK_THRESHOLD = 10;
+
 async function loadLowStock() {
-    const { data, error } = await supabaseClient.rpc("low_stock_products", { p_threshold: 10 });
-    if (error) { console.error(error); return; }
-    fillTable("low-stock-table", data, r =>
-        `<td>${escapeHtml(r.product_name)}</td><td><span class="badge badge-warning">${r.quantity} left</span></td>`, 2);
-    document.getElementById("kpi-low").textContent = (data || []).length;
+    const [{ data: products, error: prodErr }, { data: inventory, error: invErr }] = await Promise.all([
+        supabaseClient.from("product").select("product_id, name"),
+        supabaseClient.from("inventory").select("product_id, quantity, warehouse:warehouse_id(name)")
+    ]);
+    if (prodErr) { console.error(prodErr); return; }
+    if (invErr) console.error(invErr);
+
+    const productById = new Map((products || []).map(p => [p.product_id, p.name]));
+    const stockedProductIds = new Set();
+    const rows = [];
+
+    (inventory || []).forEach(i => {
+        stockedProductIds.add(i.product_id);
+        if (i.quantity < LOW_STOCK_THRESHOLD) {
+            rows.push({
+                product_name: productById.get(i.product_id) ?? "-",
+                warehouse_name: i.warehouse?.name ?? "-",
+                quantity: i.quantity
+            });
+        }
+    });
+
+    (products || []).forEach(p => {
+        if (!stockedProductIds.has(p.product_id)) {
+            rows.push({ product_name: p.name, warehouse_name: "Not stocked in any warehouse", quantity: 0 });
+        }
+    });
+
+    rows.sort((a, b) => a.quantity - b.quantity);
+
+    fillTable("low-stock-table", rows, r => `
+        <td>${escapeHtml(r.product_name)}</td>
+        <td>${escapeHtml(r.warehouse_name)}</td>
+        <td>${r.quantity === 0
+            ? `<span class="badge badge-critical">0 left</span>`
+            : `<span class="badge badge-warning">${r.quantity} left</span>`}</td>
+    `, 3);
+    document.getElementById("kpi-low").textContent = rows.length;
 }
 
 document.getElementById("stock-search").addEventListener("input", (e) => {

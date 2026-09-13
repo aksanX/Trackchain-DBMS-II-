@@ -27,21 +27,27 @@ Purchasing        Marketing       Warehouse
                  Customer (public pages only)
 ```
 
-No login system exists (same trust model the project has always had — this is a closed academic demo). Every internal module is visible to whoever loads the dashboard; a customer never sees the sidebar at all, only `storefront/product.html` and `storefront/track.html`.
+Every internal page requires a real Supabase Auth login (`login/index.html`) — an admin creates each staff account and assigns its role from the in-app Staff Management page; there's no self-signup. Route guards restrict which sidebar pages each role can open, and the database enforces the same boundaries independently via row-level security (see [Setup step 4](#4-set-up-staff-authentication-admin--roles)). A customer never sees the sidebar or logs in at all — only `storefront/product.html` and `storefront/track.html`, both public.
 
 ## Project structure
 
 ```
 trackchain/
 ├── database/
-│   ├── schema.sql                                 -- tables, triggers, functions, procedures, cursor, views (everything below, already included)
+│   ├── schema.sql                                 -- tables, triggers, functions, procedures, cursor, views, staff auth, RLS (everything below, already included)
 │   ├── seed_data.sql                              -- sample data for demo purposes
 │   ├── migration_add_purchase_management.sql      -- adds Purchase Management to an existing DB
 │   ├── migration_fix_purchase_integrity.sql       -- supplier-match check + delete-reversal fix
 │   ├── migration_add_stock_transfers.sql          -- adds warehouse-to-warehouse Stock Transfers
-│   └── migration_add_warehouse_capacity_rent.sql  -- adds capacity, aging rent, and hub routing
+│   ├── migration_add_warehouse_capacity_rent.sql  -- adds capacity, aging rent, and hub routing
+│   ├── migration_add_staff_auth.sql               -- adds real Supabase Auth + staff_profiles (already in schema.sql for a fresh install)
+│   ├── migration_add_business_table_rls.sql       -- enables RLS + role policies on the 17 business tables (already in schema.sql for a fresh install)
+│   ├── migration_secure_analytics_views.sql       -- makes the analytics views respect the caller's RLS instead of the view owner's (already in schema.sql for a fresh install)
+│   └── migration_fix_campaign_revenue.sql         -- fixes a revenue double-counting bug in campaign_performance/platform_performance (already in schema.sql for a fresh install)
 └── frontend/
     ├── index.html               -- Dashboard Overview (KPIs, charts, top lists)
+    ├── login/index.html         -- Staff login (Supabase Auth)
+    ├── staff/index.html         -- Staff Management (admin-only: create/deactivate/reactivate/delete accounts)
     ├── suppliers/index.html     -- Supplier Management (add/edit/search)
     ├── products/index.html      -- Product Management (add/edit/search, margin-based pricing)
     ├── purchases/index.html     -- Purchase Management (record a purchase, see history)
@@ -99,24 +105,25 @@ Every internal page uses **root-relative** links (`/css/style.css`, `/orders/ind
 
 ### 4. Set up staff authentication (admin + roles)
 
-Login is real Supabase Auth now — no hardcoded passwords, no self-signup. An admin creates every other account from inside the app. One-time setup:
+Login is real Supabase Auth now — no hardcoded passwords, no self-signup. An admin creates every other account from inside the app. `schema.sql` (step 2) already created `staff_profiles`, `current_staff_role()`, and RLS policies on every business table — there's no separate migration to run for a fresh install. One-time setup from here:
 
-1. **Run the migration**: SQL Editor → paste `database/migration_add_staff_auth.sql` → Run. This adds `staff_profiles` (RLS-protected — see the comment in that file for why it's treated differently from the other 17 tables, which stay open on purpose for this course project).
-2. **Create the first admin manually** (bootstrap — every account after this one is created in-app instead):
+1. **Create the first admin manually** (bootstrap — every account after this one is created in-app instead):
    - Dashboard → **Authentication → Users → Add User** — real email, a password, toggle **Auto Confirm User** on.
    - Copy that user's UUID, then in the SQL Editor:
      ```sql
      INSERT INTO public.staff_profiles (id, email, full_name, role, is_active)
      VALUES ('<paste-the-uuid>', '<same-email>', '<your-name>', 'admin', TRUE);
      ```
-3. **Deploy the admin edge function** (this is what lets the admin create/deactivate/delete staff from the UI — it's the only place the service role key is ever used, and it never reaches the browser):
+2. **Deploy the admin edge function** (this is what lets the admin create/deactivate/delete staff from the UI — it's the only place the service role key is ever used, and it never reaches the browser):
    ```
    npm install -g supabase
    supabase login
    supabase link --project-ref xcufebaylsbpziwsljye
    supabase functions deploy admin-manage-staff
    ```
-4. Sign in at `/login/index.html` with the admin account from step 2 → **Staff Management** in the sidebar → create the Purchasing/Marketing/Warehouse/Shipment accounts for your team from there.
+3. Sign in at `/login/index.html` with the admin account from step 1 → **Staff Management** in the sidebar → create the Purchasing/Marketing/Warehouse/Shipment accounts for your team from there.
+
+If instead you're upgrading an **already-deployed** project created from an older copy of `schema.sql` (one that ended in `DISABLE ROW LEVEL SECURITY`), run these once, in this exact order, in the SQL Editor before the steps above: `migration_add_staff_auth.sql` → `migration_add_business_table_rls.sql` → `migration_fix_campaign_revenue.sql` → `migration_secure_analytics_views.sql`. The last one must run last: `CREATE OR REPLACE VIEW` (used by the revenue fix) resets a view's `security_invoker` setting back off, so if you ever re-run the revenue fix after the security fix, just run `migration_secure_analytics_views.sql` once more afterward.
 
 Deactivating a staff account blocks their next login immediately (checked on every page load) without deleting their order/purchase/audit history. There's always at least one active admin required — the function refuses to deactivate or delete the last one.
 
@@ -145,6 +152,8 @@ Deactivating a staff account blocks their next login immediately (checked on eve
 | `transfer_stock_api(...)` | Function | Moves stock between warehouses; carries each unit's original arrival date so aging rent survives the move |
 | `pick_source_warehouse(product, qty)` / `hub_routing_preview(product, qty)` | Functions | Recommend which warehouse should fulfil an order line (prefers relieving the hub with the most aging surcharge on that product); the preview version returns every candidate hub and why it won or lost |
 | `order_fulfilment` | View | Ties each order back to the hub it actually shipped from — powers the per-warehouse Stock In/Out flow |
+| `staff_profiles` / `current_staff_role()` | Table / Function | Backs real Supabase Auth login: one row per staff account (role, active flag); `current_staff_role()` is a `SECURITY DEFINER` helper every RLS policy calls to check the caller's role |
+| Row-level security policies (Section 11) | Policies | Every business table restricts SELECT to logged-in staff and scopes INSERT/UPDATE/DELETE to the specific role that owns that write in the UI (e.g. only `marketing`/`admin` can write `campaign`); the public storefront gets its own narrow anon-only policies |
 
 ## Why `order_attribution` is a separate table
 
@@ -164,8 +173,10 @@ Hub routing (`pick_source_warehouse`) exists to reduce that surcharge: when an o
 
 ## Known simplifications (documented on purpose)
 
-- **No authentication** — every internal module is visible to anyone who loads the dashboard. The 6 roles in the brief describe *who conceptually uses which module*, not an access-control system; adding real auth is a separate, larger undertaking out of scope here.
-- **Row Level Security is disabled** on all tables for this demo — acceptable for a closed academic project with no real user data, not for production.
+- **Public storefront RLS policies are broader than a real production system would allow** — the anon key can read every row of `product`, `inventory`, `customer`, `shipment`, `shipment_status`, `campaign`, and `tracking_link` (see Section 11.4 of `schema.sql`), not just the rows a given visitor actually needs. Acceptable for a closed academic demo with no real customer data, not for a real deployment.
+- **Guest checkout (`place_order_api`) is a public function with no ownership check** — anyone with the anon key can submit an order under an arbitrary `customer_id` or attribute it to an arbitrary `tracking_link_id` via a direct API call, not just through the storefront UI. Fine for a controlled demo, not safe for a real public shop.
+- **Campaign `start_date`/`end_date` are stored but not enforced** — nothing in the database blocks an expired or not-yet-started campaign's tracking links from logging clicks or attributing orders; enforcement exists only as a possible UI-level improvement, not yet implemented.
+- **Shipment status order is enforced only by the UI** — the database allows a direct insert of any status (`Packed`/`In Transit`/`Out For Delivery`/`Delivered`) in any order or a duplicate status; there is no trigger validating the sequence.
 - **Click-to-order attribution** is per-link (via the `code` query param carried from redirect → storefront → order), not full session tracking.
 - **Country detection** on the redirect page uses a free third-party IP geolocation API (`ipapi.co`) — this is genuinely how real ad platforms do it, but is best-effort; the fetch has a hard 2.5s timeout so a slow/unavailable geolocation service can never block click logging itself.
 - **Guest checkout** identifies a customer by phone number (match existing, or create new) — there's no login, so this is the simplest correct way to avoid one real person becoming multiple `customer` rows.

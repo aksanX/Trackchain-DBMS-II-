@@ -51,6 +51,10 @@
 --   auto-shipment-creation) also become SECURITY DEFINER, so those
 --   system-maintained side effects keep working no matter which role's
 --   direct action fired them.
+--
+-- Every CREATE POLICY below is preceded by DROP POLICY IF EXISTS, so this
+-- file is safe to run more than once -- e.g. if you're not sure whether
+-- it's already been applied to this project.
 -- =========================================================
 
 
@@ -81,24 +85,41 @@ ALTER TABLE audit_log         ENABLE ROW LEVEL SECURITY;
 -- SECTION B: STAFF-WIDE READ ACCESS
 -- =========================================================
 
+DROP POLICY IF EXISTS staff_select_all ON supplier;
 CREATE POLICY staff_select_all ON supplier          FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON product;
 CREATE POLICY staff_select_all ON product            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON warehouse;
 CREATE POLICY staff_select_all ON warehouse           FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON inventory;
 CREATE POLICY staff_select_all ON inventory           FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON stock_transfer;
 CREATE POLICY staff_select_all ON stock_transfer      FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON customer;
 CREATE POLICY staff_select_all ON customer            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON "order";
 CREATE POLICY staff_select_all ON "order"             FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON order_item;
 CREATE POLICY staff_select_all ON order_item          FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON campaign;
 CREATE POLICY staff_select_all ON campaign            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON tracking_link;
 CREATE POLICY staff_select_all ON tracking_link       FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON order_attribution;
 CREATE POLICY staff_select_all ON order_attribution   FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON click;
 CREATE POLICY staff_select_all ON click               FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON shipment;
 CREATE POLICY staff_select_all ON shipment            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON shipment_status;
 CREATE POLICY staff_select_all ON shipment_status     FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON purchase;
 CREATE POLICY staff_select_all ON purchase            FOR SELECT USING (current_staff_role() IS NOT NULL);
+DROP POLICY IF EXISTS staff_select_all ON purchase_item;
 CREATE POLICY staff_select_all ON purchase_item       FOR SELECT USING (current_staff_role() IS NOT NULL);
 
 -- audit_log is the one exception: only admin can read it.
+DROP POLICY IF EXISTS admin_select_audit_log ON audit_log;
 CREATE POLICY admin_select_audit_log ON audit_log
     FOR SELECT USING (current_staff_role() = 'admin');
 
@@ -109,20 +130,29 @@ CREATE POLICY admin_select_audit_log ON audit_log
 -- Scoped to exactly what frontend/storefront/*.html reads/writes today.
 
 -- product.html: browse the catalog + see stock
+DROP POLICY IF EXISTS anon_select_product ON product;
 CREATE POLICY anon_select_product   ON product   FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_inventory ON inventory;
 CREATE POLICY anon_select_inventory ON inventory FOR SELECT TO anon USING (true);
 
 -- redirect.html: resolve a tracking link, log a click
+DROP POLICY IF EXISTS anon_select_tracking_link ON tracking_link;
 CREATE POLICY anon_select_tracking_link ON tracking_link FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_campaign ON campaign;
 CREATE POLICY anon_select_campaign      ON campaign      FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_insert_click ON click;
 CREATE POLICY anon_insert_click         ON click         FOR INSERT TO anon WITH CHECK (true);
 
 -- product.html guest checkout: look up or create a customer by phone
+DROP POLICY IF EXISTS anon_select_customer ON customer;
 CREATE POLICY anon_select_customer ON customer FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_insert_customer ON customer;
 CREATE POLICY anon_insert_customer ON customer FOR INSERT TO anon WITH CHECK (true);
 
 -- track.html: look up a shipment by its TRK code
+DROP POLICY IF EXISTS anon_select_shipment ON shipment;
 CREATE POLICY anon_select_shipment        ON shipment        FOR SELECT TO anon USING (true);
+DROP POLICY IF EXISTS anon_select_shipment_status ON shipment_status;
 CREATE POLICY anon_select_shipment_status ON shipment_status FOR SELECT TO anon USING (true);
 
 
@@ -143,39 +173,47 @@ CREATE POLICY anon_select_shipment_status ON shipment_status FOR SELECT TO anon 
 -- write to those happens only through the SECURITY DEFINER functions and
 -- triggers in Section E/F, which bypass RLS for their own internal writes.
 
+DROP POLICY IF EXISTS role_write_supplier ON supplier;
 CREATE POLICY role_write_supplier ON supplier
     FOR ALL
     USING       (current_staff_role() IN ('purchasing','admin'))
     WITH CHECK  (current_staff_role() IN ('purchasing','admin'));
 
+DROP POLICY IF EXISTS role_write_product ON product;
 CREATE POLICY role_write_product ON product
     FOR ALL
     USING       (current_staff_role() IN ('purchasing','warehouse','admin'))
     WITH CHECK  (current_staff_role() IN ('purchasing','warehouse','admin'));
 
+DROP POLICY IF EXISTS role_write_warehouse ON warehouse;
 CREATE POLICY role_write_warehouse ON warehouse
     FOR ALL
     USING       (current_staff_role() IN ('warehouse','admin'))
     WITH CHECK  (current_staff_role() IN ('warehouse','admin'));
 
+DROP POLICY IF EXISTS role_write_customer ON customer;
 CREATE POLICY role_write_customer ON customer
     FOR ALL
     USING       (current_staff_role() IN ('marketing','admin'))
     WITH CHECK  (current_staff_role() IN ('marketing','admin'));
 
+DROP POLICY IF EXISTS role_delete_purchase ON purchase;
 CREATE POLICY role_delete_purchase ON purchase
     FOR DELETE
     USING (current_staff_role() IN ('purchasing','admin'));
 
+DROP POLICY IF EXISTS role_insert_shipment_status ON shipment_status;
 CREATE POLICY role_insert_shipment_status ON shipment_status
     FOR INSERT
     WITH CHECK (current_staff_role() IN ('shipment','admin'));
 
+DROP POLICY IF EXISTS role_write_campaign ON campaign;
 CREATE POLICY role_write_campaign ON campaign
     FOR ALL
     USING       (current_staff_role() IN ('marketing','admin'))
     WITH CHECK  (current_staff_role() IN ('marketing','admin'));
 
+DROP POLICY IF EXISTS role_write_tracking_link ON tracking_link;
 CREATE POLICY role_write_tracking_link ON tracking_link
     FOR ALL
     USING       (current_staff_role() IN ('marketing','admin'))
