@@ -43,7 +43,8 @@ trackchain/
 │   ├── migration_add_staff_auth.sql               -- adds real Supabase Auth + staff_profiles (already in schema.sql for a fresh install)
 │   ├── migration_add_business_table_rls.sql       -- enables RLS + role policies on the 17 business tables (already in schema.sql for a fresh install)
 │   ├── migration_secure_analytics_views.sql       -- makes the analytics views respect the caller's RLS instead of the view owner's (already in schema.sql for a fresh install)
-│   └── migration_fix_campaign_revenue.sql         -- fixes a revenue double-counting bug in campaign_performance/platform_performance (already in schema.sql for a fresh install)
+│   ├── migration_fix_campaign_revenue.sql         -- fixes a revenue double-counting bug in campaign_performance/platform_performance (already in schema.sql for a fresh install)
+│   └── migration_fix_click_tracking_rls.sql       -- lets logged-in staff log clicks too, not just anon visitors (already in schema.sql for a fresh install)
 └── frontend/
     ├── index.html               -- Dashboard Overview (KPIs, charts, top lists)
     ├── login/index.html         -- Staff login (Supabase Auth)

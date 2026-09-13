@@ -1708,6 +1708,11 @@ DROP POLICY IF EXISTS anon_select_campaign ON campaign;
 CREATE POLICY anon_select_campaign      ON campaign      FOR SELECT TO anon USING (true);
 DROP POLICY IF EXISTS anon_insert_click ON click;
 CREATE POLICY anon_insert_click         ON click         FOR INSERT TO anon WITH CHECK (true);
+-- Staff testing a tracking link while logged into the dashboard send that
+-- request as `authenticated`, not `anon` -- without this, their clicks
+-- silently never got recorded. See migration_fix_click_tracking_rls.sql.
+DROP POLICY IF EXISTS staff_insert_click ON click;
+CREATE POLICY staff_insert_click ON click FOR INSERT TO authenticated WITH CHECK (current_staff_role() IS NOT NULL);
 
 -- product.html guest checkout: look up or create a customer by phone
 DROP POLICY IF EXISTS anon_select_customer ON customer;
