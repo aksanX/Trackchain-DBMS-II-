@@ -62,16 +62,24 @@ async function handleRedirect() {
 
     // 2. Get the visitor's country from a free IP geolocation API.
     // IMPORTANT: this call is given a hard timeout via AbortController.
-    // Without one, a slow or rate-limited response from ipapi.co would
-    // hang indefinitely and the click below would never get logged --
-    // this is exactly what was silently breaking click tracking before.
+    // Without one, a slow or rate-limited response would hang
+    // indefinitely and the click below would never get logged -- this is
+    // exactly what was silently breaking click tracking before.
+    // NOTE: was ipapi.co, switched to ipwho.is -- ipapi.co now returns a
+    // Cloudflare bot-challenge HTML page instead of JSON for plain
+    // fetch() calls (confirmed with and without a real browser
+    // User-Agent), which silently broke this for every real visitor, not
+    // just local testing. ipwho.is returns real JSON over HTTPS with an
+    // open CORS policy and needs no API key.
     let country = "Unknown";
     const geoController = new AbortController();
     const geoTimeout = setTimeout(() => geoController.abort(), 2500);
     try {
-        const geoRes = await fetch("https://ipapi.co/json/", { signal: geoController.signal });
+        const geoRes = await fetch("https://ipwho.is/", { signal: geoController.signal });
         const geoData = await geoRes.json();
-        country = geoData.country_name || "Unknown";
+        if (geoData.success !== false && geoData.country) {
+            country = geoData.country;
+        }
     } catch (e) {
         console.warn("Geolocation lookup failed or timed out, continuing without it.", e);
     } finally {

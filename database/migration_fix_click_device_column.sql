@@ -1,0 +1,23 @@
+-- =========================================================
+-- Migration: click.device was too narrow to ever hold a real value
+-- =========================================================
+-- Bug: click.device is VARCHAR(50), but storefront/redirect.html inserts
+-- the full navigator.userAgent string, which routinely runs well past
+-- 100 characters -- in-app browsers (Facebook, Instagram) are especially
+-- long, e.g. "...Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/302.0.0.13.114;]".
+-- Every click insert has been failing with "value too long for type
+-- character varying(50)" since this feature was built -- this predates
+-- and is independent of the RLS fix in migration_fix_click_tracking_rls.sql
+-- (that fix was still necessary; this is a second, separate bug that was
+-- hiding behind it).
+--
+-- Fix: drop the arbitrary cap. There's no reason to truncate diagnostic
+-- data used for device-bucketing (see loadClickAnalytics() in
+-- frontend/campaigns/index.html) -- TEXT costs nothing extra in Postgres
+-- over VARCHAR(n) and removes this failure mode entirely.
+--
+-- Run this once in the Supabase SQL Editor. For a brand-new project,
+-- just run the full schema.sql instead -- it already includes this fix.
+-- =========================================================
+
+ALTER TABLE click ALTER COLUMN device TYPE TEXT;

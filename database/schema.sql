@@ -202,7 +202,7 @@ CREATE TABLE click (
     link_id     INT NOT NULL REFERENCES tracking_link(link_id),
     click_time  TIMESTAMP NOT NULL DEFAULT NOW(),
     country     VARCHAR(80),
-    device      VARCHAR(50),
+    device      TEXT, -- full navigator.userAgent; in-app browser UAs (Facebook, Instagram) routinely exceed 100+ chars
     -- Nullable on purpose: Facebook/Instagram/WhatsApp clicks are from an
     -- anonymous public audience (NULL). Email clicks are from a known
     -- recipient, so we can fill this in.
