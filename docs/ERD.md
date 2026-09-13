@@ -1,6 +1,10 @@
 # TrackChain — Entity Relationship Diagram
 
-The complete stored schema: **17 tables**, **21 foreign keys**, across six subsystems.
+The complete stored schema: **18 tables**, **22 foreign keys** among the business tables,
+across seven subsystems (core supply chain, customer orders, campaign analytics, shipment
+tracking, purchase management, audit logging, and staff authentication/RLS).
+`staff_profiles` additionally carries two foreign keys into Supabase's own `auth.users`
+table, not counted above since that table isn't part of this schema.
 Views, functions and triggers are not shown here — only relations. Source of truth is
 [`database/schema.sql`](../database/schema.sql).
 
@@ -21,6 +25,7 @@ erDiagram
 
     warehouse ||--o{ inventory : "holds"
     warehouse ||--o{ purchase : "receives"
+    warehouse ||--o{ purchase_item : "received into"
     warehouse ||--o{ stock_transfer : "sends from"
     warehouse ||--o{ stock_transfer : "receives into"
 
@@ -30,7 +35,7 @@ erDiagram
     customer |o--o{ click : "may be known for"
 
     ORDER ||--|{ order_item : "contains"
-    ORDER ||--o{ shipment : "is shipped as"
+    ORDER ||--o| shipment : "is shipped as"
     ORDER ||--o| order_attribution : "is credited by"
 
     shipment ||--|{ shipment_status : "is tracked by"
@@ -62,14 +67,14 @@ erDiagram
     inventory {
         int inventory_id PK
         int warehouse_id FK
-        int product_id FK
+        int product_id FK "ON DELETE CASCADE"
         int quantity "CHECK >= 0"
     }
     stock_transfer {
         int transfer_id PK
         int from_warehouse_id FK
         int to_warehouse_id FK
-        int product_id FK
+        int product_id FK "ON DELETE CASCADE"
         int quantity "CHECK > 0"
         timestamp transfer_date "when it moved"
         timestamp origin_date "age it carries"
@@ -82,8 +87,9 @@ erDiagram
     }
     purchase_item {
         int purchase_item_id PK
-        int purchase_id FK
-        int product_id FK
+        int purchase_id FK "ON DELETE CASCADE"
+        int product_id FK "ON DELETE CASCADE"
+        int warehouse_id FK "denormalized copy of purchase.warehouse_id"
         int quantity "CHECK > 0"
         numeric unit_cost
     }
@@ -100,50 +106,50 @@ erDiagram
     }
     order_item {
         int order_item_id PK
-        int order_id FK
-        int product_id FK
+        int order_id FK "ON DELETE CASCADE"
+        int product_id FK "ON DELETE CASCADE"
         int quantity "CHECK > 0"
         numeric unit_price
     }
     shipment {
         int shipment_id PK
-        int order_id FK
+        int order_id FK UK "ON DELETE CASCADE"
         varchar tracking_code UK "TRK-nnn by trigger"
         timestamp shipment_date
     }
     shipment_status {
         int status_id PK
-        int shipment_id FK
+        int shipment_id FK "ON DELETE CASCADE"
         varchar location "sourcing hub name"
-        varchar status "4-value CHECK"
+        varchar status "4-value CHECK, sequence enforced by trigger"
         timestamp updated_time
     }
     campaign {
         int campaign_id PK
-        int product_id FK
+        int product_id FK "ON DELETE CASCADE"
         varchar campaign_name
         date start_date
         date end_date
     }
     tracking_link {
         int link_id PK
-        int campaign_id FK
+        int campaign_id FK "ON DELETE CASCADE"
         varchar platform "4-value CHECK"
         varchar short_code UK "by trigger"
         text destination_url
     }
     click {
         int click_id PK
-        int link_id FK
+        int link_id FK "ON DELETE CASCADE"
         int customer_id FK "NULL when anonymous"
         timestamp click_time
         varchar country
-        varchar device
+        text device "full navigator.userAgent"
     }
     order_attribution {
         int attribution_id PK
-        int order_id FK "UNIQUE"
-        int link_id FK
+        int order_id FK "UNIQUE, ON DELETE CASCADE"
+        int link_id FK "ON DELETE CASCADE"
         timestamp attributed_time
     }
     audit_log {
@@ -153,9 +159,20 @@ erDiagram
         int record_id "loose ref, no FK"
         timestamp log_time
     }
+    staff_profiles {
+        uuid id PK "FK to auth.users, ON DELETE CASCADE"
+        text email
+        text full_name
+        text role "5-value CHECK"
+        boolean is_active "DEFAULT TRUE"
+        uuid created_by "FK to auth.users"
+        timestamptz created_at
+    }
 ```
 
-`audit_log` stands alone by design — it holds no foreign key.
+`audit_log` and `staff_profiles` both stand alone by design — neither holds a foreign key
+into any other table in this schema (`staff_profiles` only references Supabase's own
+`auth.users`).
 
 ## Foreign key reference
 
@@ -166,25 +183,26 @@ while children exist.
 |---|---|---|---|---|
 | `product.supplier_id` | `supplier` | 1 : N | | A supplier sells many products; each product has one source |
 | `inventory.warehouse_id` | `warehouse` | 1 : N | | Stock rows belong to a hub |
-| `inventory.product_id` | `product` | 1 : N | | With the above, resolves warehouse ⇄ product M:N |
+| `inventory.product_id` | `product` | 1 : N | CASCADE | With the above, resolves warehouse ⇄ product M:N; deleting a product removes its stock rows |
 | `stock_transfer.from_warehouse_id` | `warehouse` | 1 : N | | Origin hub of a move |
 | `stock_transfer.to_warehouse_id` | `warehouse` | 1 : N | | Destination hub; CHECK forbids equality |
-| `stock_transfer.product_id` | `product` | 1 : N | | What was moved |
+| `stock_transfer.product_id` | `product` | 1 : N | CASCADE | What was moved |
 | `purchase.supplier_id` | `supplier` | 1 : N | | Who we bought from |
 | `purchase.warehouse_id` | `warehouse` | 1 : N | | Where goods landed — the input for stock age |
 | `purchase_item.purchase_id` | `purchase` | 1 : N | CASCADE | Line items are parts of a purchase |
-| `purchase_item.product_id` | `product` | 1 : N | | What was bought |
+| `purchase_item.product_id` | `product` | 1 : N | CASCADE | What was bought |
+| `purchase_item.warehouse_id` | `warehouse` | 1 : N | | Denormalized copy of `purchase.warehouse_id`, so the inventory-reversal trigger still knows the warehouse even if the parent `purchase` row is gone in the same statement |
 | `"order".customer_id` | `customer` | 1 : N | | A customer places many orders |
 | `order_item.order_id` | `"order"` | 1 : N | CASCADE | Line items die with their order |
-| `order_item.product_id` | `product` | 1 : N | | What was sold |
-| `shipment.order_id` | `"order"` | 1 : N | | One per order in practice — by trigger, not constraint |
+| `order_item.product_id` | `product` | 1 : N | CASCADE | What was sold |
+| `shipment.order_id` | `"order"` | 1 : 0..1 | CASCADE | UNIQUE — at most one shipment per order, enforced by constraint, not just trigger convention |
 | `shipment_status.shipment_id` | `shipment` | 1 : N | CASCADE | The status history of one shipment |
-| `campaign.product_id` | `product` | 1 : N | | Each campaign promotes one product |
-| `tracking_link.campaign_id` | `campaign` | 1 : N | | One link per platform per campaign |
-| `click.link_id` | `tracking_link` | 1 : N | | Every click belongs to a link |
+| `campaign.product_id` | `product` | 1 : N | CASCADE | Each campaign promotes one product |
+| `tracking_link.campaign_id` | `campaign` | 1 : N | CASCADE | One link per platform per campaign |
+| `click.link_id` | `tracking_link` | 1 : N | CASCADE | Every click belongs to a link |
 | `click.customer_id` | `customer` | 0..1 : N | | Nullable — social traffic is anonymous |
 | `order_attribution.order_id` | `"order"` | 1 : 0..1 | CASCADE | UNIQUE — at most one attribution per order |
-| `order_attribution.link_id` | `tracking_link` | 1 : N | | Which link earned the credit |
+| `order_attribution.link_id` | `tracking_link` | 1 : N | CASCADE | Which link earned the credit |
 
 ## Modeling decisions worth defending
 
@@ -207,7 +225,9 @@ their age with them, so nobody can clear a rent surcharge by bouncing a pallet b
 **Status is a history, not a column.** `shipment_status` is a child table rather than a
 `status` field on `shipment`, so every transition keeps its own timestamp and location.
 That is what makes the pending-shipment cursor report and the public tracking page possible.
-Its `location` field on the `Packed` row doubles as the sourcing-hub record.
+Its `location` field on the `Packed` row doubles as the sourcing-hub record. A trigger also
+enforces the transition order itself (Packed → In Transit → Out For Delivery → Delivered,
+one step at a time) — this used to be a UI-only convention.
 
 **The audit log has no foreign key.** `record_id` points into `"order"`, `inventory`, or
 `purchase` depending on `table_name`, so no single FK could express it — and a real FK
@@ -216,3 +236,13 @@ would defeat the purpose, since a log entry must outlive the row whose deletion 
 **Two foreign keys to one parent.** `stock_transfer` references `warehouse` twice, as
 origin and destination. The `CHECK (from ≠ to)` is what keeps the relationship meaningful:
 without it a "move" could be a no-op that still credited itself a fresh arrival date.
+
+**Deleting a product is total, not soft.** There's no "discontinue" flag — deleting a
+`product` cascades through `inventory`, `stock_transfer`, `order_item`, `campaign`,
+`purchase_item`, and (via `campaign`/`tracking_link`) all the way down into
+`order_attribution` and `click`. This is a one-way operation: once a product with real
+history is deleted, that history is gone with it.
+
+**`staff_profiles` stands alone too.** Like `audit_log`, it holds no FK into the business
+tables — every RLS policy reaches it indirectly through the `current_staff_role()`
+function rather than a join.
