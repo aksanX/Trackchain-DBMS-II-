@@ -160,16 +160,27 @@ FROM shipment s WHERE s.shipment_id = ss.shipment_id AND s.order_id = 4 AND ss.s
 -- The 'In Transit' rows read their location back off the 'Packed' row rather
 -- than hardcoding a hub name, so they always agree with whichever hub
 -- pick_source_warehouse() actually chose for the order.
+-- One INSERT per row, in strict pipeline order -- schema.sql now enforces
+-- Packed -> In Transit -> Out For Delivery -> Delivered via
+-- trg_enforce_shipment_status_sequence, which checks each row against
+-- whatever the LATEST row for that shipment is at the moment it's
+-- inserted. A single combined multi-row INSERT (e.g. one UNION ALL) would
+-- rely on Postgres processing those rows in exactly the written order to
+-- satisfy that trigger -- true in practice, but not a documented guarantee.
+-- Separate statements make the ordering explicit instead of implicit.
 INSERT INTO shipment_status (shipment_id, location, status, updated_time)
 SELECT s.shipment_id, packed.location, 'In Transit', NOW() - INTERVAL '3 day'
 FROM shipment s
 JOIN shipment_status packed ON packed.shipment_id = s.shipment_id AND packed.status = 'Packed'
-WHERE s.order_id = 1
-UNION ALL
-SELECT s.shipment_id, 'Customer Area', 'Out For Delivery', NOW() - INTERVAL '2 day' FROM shipment s WHERE s.order_id = 1
-UNION ALL
-SELECT s.shipment_id, 'Customer Area', 'Delivered', NOW() - INTERVAL '1 day' FROM shipment s WHERE s.order_id = 1
-UNION ALL
+WHERE s.order_id = 1;
+
+INSERT INTO shipment_status (shipment_id, location, status, updated_time)
+SELECT s.shipment_id, 'Customer Area', 'Out For Delivery', NOW() - INTERVAL '2 day' FROM shipment s WHERE s.order_id = 1;
+
+INSERT INTO shipment_status (shipment_id, location, status, updated_time)
+SELECT s.shipment_id, 'Customer Area', 'Delivered', NOW() - INTERVAL '1 day' FROM shipment s WHERE s.order_id = 1;
+
+INSERT INTO shipment_status (shipment_id, location, status, updated_time)
 SELECT s.shipment_id, packed.location, 'In Transit', NOW() - INTERVAL '2 day'
 FROM shipment s
 JOIN shipment_status packed ON packed.shipment_id = s.shipment_id AND packed.status = 'Packed'

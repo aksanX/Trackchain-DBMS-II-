@@ -68,10 +68,17 @@ CREATE TABLE warehouse (
     ) STORED
 );
 
+-- ON DELETE CASCADE on product_id (here and on stock_transfer/order_item/
+-- campaign/purchase_item below): deleting a product is a deliberate choice
+-- to remove it and everything about it from the business -- every unit of
+-- it in stock, every past sale, every purchase, every campaign. There is
+-- no "discontinue instead" flag; Delete IS the way to stop selling
+-- something. This is a one-way operation -- once a product with real
+-- history is deleted, that history is gone with it, permanently.
 CREATE TABLE inventory (
     inventory_id SERIAL PRIMARY KEY,
     warehouse_id INT NOT NULL REFERENCES warehouse(warehouse_id),
-    product_id   INT NOT NULL REFERENCES product(product_id),
+    product_id   INT NOT NULL REFERENCES product(product_id) ON DELETE CASCADE,
     quantity     INT NOT NULL DEFAULT 0 CHECK (quantity >= 0),
     UNIQUE (warehouse_id, product_id)  -- one row per product per warehouse
 );
@@ -98,7 +105,7 @@ CREATE TABLE stock_transfer (
     transfer_id       SERIAL PRIMARY KEY,
     from_warehouse_id INT NOT NULL REFERENCES warehouse(warehouse_id),
     to_warehouse_id   INT NOT NULL REFERENCES warehouse(warehouse_id),
-    product_id        INT NOT NULL REFERENCES product(product_id),
+    product_id        INT NOT NULL REFERENCES product(product_id) ON DELETE CASCADE,
     quantity          INT NOT NULL CHECK (quantity > 0),
     transfer_date     TIMESTAMP NOT NULL DEFAULT NOW(),
     origin_date       TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -129,7 +136,7 @@ CREATE TABLE "order" (
 CREATE TABLE order_item (
     order_item_id SERIAL PRIMARY KEY,
     order_id      INT NOT NULL REFERENCES "order"(order_id) ON DELETE CASCADE,
-    product_id    INT NOT NULL REFERENCES product(product_id),
+    product_id    INT NOT NULL REFERENCES product(product_id) ON DELETE CASCADE,
     quantity      INT NOT NULL CHECK (quantity > 0),
     unit_price    NUMERIC(10,2) NOT NULL CHECK (unit_price >= 0)
 );
@@ -141,15 +148,21 @@ CREATE TABLE order_item (
 
 CREATE TABLE campaign (
     campaign_id   SERIAL PRIMARY KEY,
-    product_id    INT NOT NULL REFERENCES product(product_id),
+    product_id    INT NOT NULL REFERENCES product(product_id) ON DELETE CASCADE,
     campaign_name VARCHAR(150) NOT NULL,
     start_date    DATE,
     end_date      DATE
 );
 
+-- ON DELETE CASCADE here (and on order_attribution/click below): a campaign
+-- only ever gets deleted as part of its product being deleted (see the
+-- CASCADE from product -> campaign), and that delete has to reach all the
+-- way down through tracking_link to order_attribution/click, or Postgres
+-- blocks the whole chain the moment it hits the first table that doesn't
+-- cascade -- exactly what happened before this was added.
 CREATE TABLE tracking_link (
     link_id         SERIAL PRIMARY KEY,
-    campaign_id     INT NOT NULL REFERENCES campaign(campaign_id),
+    campaign_id     INT NOT NULL REFERENCES campaign(campaign_id) ON DELETE CASCADE,
     platform        VARCHAR(30) NOT NULL CHECK (platform IN ('Facebook','WhatsApp','Instagram','Email')),
     short_code      VARCHAR(20) UNIQUE NOT NULL,  -- e.g. FB10
     destination_url TEXT
@@ -162,7 +175,7 @@ CREATE TABLE tracking_link (
 CREATE TABLE order_attribution (
     attribution_id  SERIAL PRIMARY KEY,
     order_id        INT NOT NULL REFERENCES "order"(order_id) ON DELETE CASCADE,
-    link_id         INT NOT NULL REFERENCES tracking_link(link_id),
+    link_id         INT NOT NULL REFERENCES tracking_link(link_id) ON DELETE CASCADE,
     attributed_time TIMESTAMP NOT NULL DEFAULT NOW(),
     UNIQUE (order_id)  -- one attribution row per order in this simple model
 );
@@ -199,7 +212,7 @@ FOR EACH ROW EXECUTE FUNCTION generate_short_code();
 
 CREATE TABLE click (
     click_id    SERIAL PRIMARY KEY,
-    link_id     INT NOT NULL REFERENCES tracking_link(link_id),
+    link_id     INT NOT NULL REFERENCES tracking_link(link_id) ON DELETE CASCADE,
     click_time  TIMESTAMP NOT NULL DEFAULT NOW(),
     country     VARCHAR(80),
     device      TEXT, -- full navigator.userAgent; in-app browser UAs (Facebook, Instagram) routinely exceed 100+ chars
@@ -209,14 +222,24 @@ CREATE TABLE click (
     customer_id INT REFERENCES customer(customer_id)
 );
 
-
 -- =========================================================
 -- SECTION 4: SHIPMENT TRACKING
 -- =========================================================
 
+-- ON DELETE CASCADE: an order that loses its last order_item (because the
+-- product on it was deleted) is deleted itself too -- see
+-- trg_delete_order_if_empty in Section 6. That has to reach the shipment
+-- and its status history too, or a real, completed shipment would be left
+-- behind attached to an order that no longer exists.
+-- order_id is UNIQUE: create_shipment_for_order() already only ever creates
+-- one shipment per order by construction, but nothing enforced that at the
+-- schema level -- a real constraint here (a) makes that guarantee actually
+-- durable instead of just "true because only one code path writes this
+-- table today", and (b) makes Supabase embed `order.shipment` as a single
+-- object instead of an array, matching how the frontend already reads it.
 CREATE TABLE shipment (
     shipment_id    SERIAL PRIMARY KEY,
-    order_id       INT NOT NULL REFERENCES "order"(order_id),
+    order_id       INT NOT NULL UNIQUE REFERENCES "order"(order_id) ON DELETE CASCADE,
     tracking_code  VARCHAR(20) UNIQUE,  -- filled in by trigger, see Section 6
     shipment_date  TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -231,6 +254,65 @@ CREATE TABLE shipment_status (
     updated_time TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- Where a status sits in the required Packed -> In Transit -> Out For
+-- Delivery -> Delivered pipeline. Kept as one small lookup (same pattern as
+-- storage_age_multiplier/storage_age_band in Section 5.5) so the sequence
+-- itself lives in exactly one place.
+CREATE OR REPLACE FUNCTION shipment_status_rank(p_status VARCHAR)
+RETURNS INT AS $$
+BEGIN
+    RETURN CASE p_status
+        WHEN 'Packed'           THEN 1
+        WHEN 'In Transit'       THEN 2
+        WHEN 'Out For Delivery' THEN 3
+        WHEN 'Delivered'        THEN 4
+    END;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE SET search_path = public;
+
+-- Until now, nothing stopped a direct insert from jumping straight to
+-- 'Delivered' with no 'Packed'/'In Transit' behind it, inserting the same
+-- status twice in a row, or going backwards -- only the Shipments page's
+-- own UI (which only ever offers the single next status via
+-- nextShipmentStatus() in ui-helpers.js) happened to keep things in order.
+-- This makes that the actual rule, not just the app's habit: a shipment's
+-- FIRST status must be 'Packed' (matching what create_shipment_for_order()
+-- always inserts), and every status after that must be EXACTLY one step
+-- ahead of the current furthest one -- no skipping, no repeats, no going
+-- back, and nothing at all once 'Delivered' is reached.
+--
+-- Not SECURITY DEFINER: this only SELECTs shipment_status, which every
+-- writer here (create_shipment_for_order running as its definer, or a
+-- shipment/admin role inserting from the UI) can already read regardless.
+CREATE OR REPLACE FUNCTION enforce_shipment_status_sequence()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_current_rank INT;
+    v_new_rank     INT := shipment_status_rank(NEW.status);
+BEGIN
+    SELECT MAX(shipment_status_rank(status)) INTO v_current_rank
+    FROM shipment_status
+    WHERE shipment_id = NEW.shipment_id;
+
+    IF v_current_rank IS NULL THEN
+        IF v_new_rank <> 1 THEN
+            RAISE EXCEPTION 'A shipment''s first status must be "Packed", not "%"', NEW.status;
+        END IF;
+    ELSIF v_current_rank = 4 THEN
+        RAISE EXCEPTION 'This shipment is already "Delivered" -- no further status can be added';
+    ELSIF v_new_rank <> v_current_rank + 1 THEN
+        RAISE EXCEPTION 'Cannot set status to "%" -- shipments must move through Packed -> In Transit -> Out For Delivery -> Delivered in order, one step at a time',
+            NEW.status;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+CREATE TRIGGER trg_enforce_shipment_status_sequence
+BEFORE INSERT ON shipment_status
+FOR EACH ROW EXECUTE FUNCTION enforce_shipment_status_sequence();
+
 
 -- =========================================================
 -- SECTION 4.5: PURCHASE MANAGEMENT
@@ -244,10 +326,27 @@ CREATE TABLE purchase (
     purchase_date TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- warehouse_id duplicates purchase.warehouse_id (every purchase_item's
+-- warehouse is really just its parent purchase's warehouse) -- normally
+-- that would be a real anomaly risk, but purchase.warehouse_id is never
+-- updated anywhere in the app (purchases are only ever inserted or deleted
+-- whole), so the two can never actually drift apart in practice.
+--
+-- It's stored here anyway, redundantly, for one reason: the trigger that
+-- reverses inventory when a purchase_item row is deleted (Section 6) needs
+-- to know which warehouse to reverse it FROM at the exact moment that row
+-- disappears -- and when the whole parent `purchase` is being deleted in
+-- the same statement, that parent row is already gone (not just about to
+-- be) by the time the cascade reaches purchase_item, so looking warehouse_id
+-- up via purchase_id at that point finds nothing. Keeping a copy directly
+-- on this row means the reversal trigger never depends on any other row
+-- still existing, no matter what else is being deleted in the same
+-- statement or what order it happens in.
 CREATE TABLE purchase_item (
     purchase_item_id SERIAL PRIMARY KEY,
     purchase_id  INT NOT NULL REFERENCES purchase(purchase_id) ON DELETE CASCADE,
-    product_id   INT NOT NULL REFERENCES product(product_id),
+    product_id   INT NOT NULL REFERENCES product(product_id) ON DELETE CASCADE,
+    warehouse_id INT NOT NULL REFERENCES warehouse(warehouse_id),
     quantity     INT NOT NULL CHECK (quantity > 0),
     unit_cost    NUMERIC(10,2) NOT NULL CHECK (unit_cost >= 0)
 );
@@ -805,6 +904,39 @@ AFTER INSERT ON order_item
 FOR EACH ROW EXECUTE FUNCTION reduce_inventory();
 
 
+-- Mirror of delete_purchase_if_empty() above, for the sales side: an order
+-- only ever means anything through its order_item rows. Deleting a product
+-- cascades away every order_item line for it (see product's FK comment),
+-- and a multi-item order that still has other lines left is correctly
+-- untouched here -- but an order whose ONLY item was that product is now an
+-- empty shell: 0 units, a shipment that really moved real stock, but
+-- nothing left to explain why it exists. Rather than leave that behind
+-- looking like the shipment never happened, the whole order (and, via the
+-- CASCADE on shipment.order_id above, its shipment + status history) goes
+-- with it -- consistent with product deletion being a real, total removal.
+--
+-- SECURITY DEFINER: "order" has no client-facing write policy at all
+-- (Section 11.5) -- every write to it happens through SECURITY DEFINER
+-- functions/triggers, and this is one of them.
+CREATE OR REPLACE FUNCTION delete_order_if_empty()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM order_item WHERE order_id = OLD.order_id) THEN
+        DELETE FROM "order" WHERE order_id = OLD.order_id;
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_delete_order_if_empty
+AFTER DELETE ON order_item
+FOR EACH ROW EXECUTE FUNCTION delete_order_if_empty();
+
+
 -- SECURITY DEFINER: fires on purchase_item so a Purchasing Officer's insert
 -- can still write into `inventory`, a table their role has no direct
 -- write policy on (only the trigger path is allowed to touch it).
@@ -814,15 +946,9 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE
-    v_warehouse_id INT;
 BEGIN
-    SELECT warehouse_id INTO v_warehouse_id
-    FROM purchase
-    WHERE purchase_id = NEW.purchase_id;
-
     INSERT INTO inventory(warehouse_id, product_id, quantity)
-    VALUES (v_warehouse_id, NEW.product_id, NEW.quantity)
+    VALUES (NEW.warehouse_id, NEW.product_id, NEW.quantity)
     ON CONFLICT (warehouse_id, product_id)
     DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity;
 
@@ -861,13 +987,65 @@ BEFORE INSERT ON purchase_item
 FOR EACH ROW EXECUTE FUNCTION check_purchase_supplier_match();
 
 
+-- 6.2a.1 A `purchase` row only ever means anything through its
+-- purchase_item rows (that's where quantity/cost live) -- a purchase with
+-- none left is not "a purchase with nothing recorded yet", it's a leftover
+-- that can no longer be seen (purchase_history INNER JOINs purchase_item)
+-- or deleted through the app (Purchase Management only lists rows
+-- purchase_history returns). That happens today whenever a product is
+-- deleted: ON DELETE CASCADE clears out that product's purchase_item rows,
+-- but `purchase` has no FK to `product` and never gets touched, so it's
+-- orphaned permanently. This trigger closes that gap for every way a
+-- purchase_item can disappear -- a product delete, or deleting the last
+-- item off a purchase some other way -- by removing the now-pointless
+-- parent row along with it.
+--
+-- SECURITY DEFINER: this fires as a side effect of deleting a PRODUCT,
+-- which purchasing/warehouse/admin can all do (Section 11.5), but only
+-- purchasing/admin have a delete policy on `purchase` itself -- without
+-- bypassing RLS here, a warehouse role's product delete would cascade the
+-- purchase_item rows away but silently fail to clean up the now-empty
+-- purchase, recreating the exact orphan this trigger exists to prevent.
+--
+-- Deleting `purchase` directly (Purchase Management's own Delete button)
+-- also cascades to purchase_item and fires this trigger for each row, but
+-- by then `purchase` itself is already gone from this transaction's view,
+-- so the DELETE below just matches zero rows -- a harmless no-op, not a
+-- second delete or a loop.
+CREATE OR REPLACE FUNCTION delete_purchase_if_empty()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM purchase_item WHERE purchase_id = OLD.purchase_id) THEN
+        DELETE FROM purchase WHERE purchase_id = OLD.purchase_id;
+    END IF;
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_delete_purchase_if_empty
+AFTER DELETE ON purchase_item
+FOR EACH ROW EXECUTE FUNCTION delete_purchase_if_empty();
+
+
 -- 6.2b Mirror image of trg_increase_inventory: reverse the inventory
--- increase if a purchase is ever deleted. Attached to `purchase` itself
--- and fired BEFORE DELETE, so it runs -- and can still see the
--- purchase_item rows -- before the ON DELETE CASCADE removes them.
--- Deleting a purchase whose stock has already been sold will fail
--- (inventory's quantity >= 0 CHECK stops it going negative), same
--- protective behavior as reduce_inventory() on the sales side.
+-- increase if a purchase is ever deleted DIRECTLY (Purchase Management's
+-- own Delete button). Attached to `purchase` itself and fired BEFORE
+-- DELETE, so it runs -- and can still see the purchase_item rows -- before
+-- the ON DELETE CASCADE removes them.
+--
+-- Deleting a purchase whose stock has already been sold is REJECTED here
+-- on purpose (inventory's quantity >= 0 CHECK stops it going negative):
+-- "delete this purchase record" means "pretend this stock was never
+-- bought", which is not a coherent thing to allow once some of it has
+-- already left through a sale. This is intentionally stricter than
+-- deleting the PRODUCT itself (6.2b.1 below), which always succeeds
+-- unconditionally -- deleting a product is a total, deliberate removal of
+-- everything about it, not a request to keep the books internally
+-- consistent.
 -- SECURITY DEFINER: fires on purchase deletion so it can still write into
 -- `inventory` regardless of the deleting role's own write policy.
 CREATE OR REPLACE FUNCTION reverse_inventory_on_purchase_delete()
@@ -892,6 +1070,59 @@ $$;
 CREATE TRIGGER trg_reverse_inventory_on_purchase_delete
 BEFORE DELETE ON purchase
 FOR EACH ROW EXECUTE FUNCTION reverse_inventory_on_purchase_delete();
+
+
+-- 6.2b.1 A purchase_item row can also disappear WITHOUT its whole purchase
+-- being deleted directly -- specifically, when a product delete's CASCADE
+-- removes just that product's line, while the purchase's other items (a
+-- different product) survive untouched. The trigger above never sees that
+-- case at all (the parent `purchase` row is never deleted, so its BEFORE
+-- DELETE never fires), so that item's contribution to inventory was never
+-- being reversed -- no VISIBLE bug only because inventory.product_id's own
+-- CASCADE (Section 1) independently deletes that exact inventory row
+-- outright whenever a product delete is what caused this. Nothing
+-- guaranteed that coincidence, though: a future "remove just one item from
+-- a purchase, keep the rest" feature would hit this gap directly and
+-- quietly leave inventory overstated. This trigger closes it, firing once
+-- per purchase_item row, for every way one can disappear.
+--
+-- Two things keep this from fighting with the trigger above instead of
+-- complementing it:
+--   1. UNCONDITIONAL, CLAMPED arithmetic (GREATEST(...,0), never a bare
+--      subtraction) -- this must NEVER raise or block, because it also
+--      fires as part of deleting a PRODUCT, which (unlike deleting a
+--      purchase directly) is required to always succeed no matter what.
+--   2. It skips entirely when the parent `purchase` row is ALREADY gone --
+--      which is exactly the direct-purchase-delete case, where the trigger
+--      above already did this exact reversal (correctly, with its stricter
+--      raise-if-oversold rule) moments earlier, before the parent row's own
+--      deletion. Without this check, a direct purchase delete would reverse
+--      every item's quantity TWICE -- once here, once above.
+-- SECURITY DEFINER: fires on purchase_item deletion (including as a side
+-- effect of deleting the parent PRODUCT) so it can still write into
+-- `inventory` regardless of the deleting role's own write policy.
+CREATE OR REPLACE FUNCTION reverse_inventory_on_purchase_item_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM purchase WHERE purchase_id = OLD.purchase_id) THEN
+        RETURN OLD;
+    END IF;
+
+    UPDATE inventory
+    SET quantity = GREATEST(quantity - OLD.quantity, 0)
+    WHERE warehouse_id = OLD.warehouse_id AND product_id = OLD.product_id;
+
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER trg_reverse_inventory_on_purchase_item_delete
+BEFORE DELETE ON purchase_item
+FOR EACH ROW EXECUTE FUNCTION reverse_inventory_on_purchase_item_delete();
 
 
 -- 6.2c Enforce each warehouse's predefined capacity (Section 5.5).
@@ -1171,7 +1402,7 @@ SET search_path = public
 AS $$
 DECLARE
     v_order_id INT;
-    v_price NUMERIC;
+    v_price    NUMERIC;
 BEGIN
     SELECT price INTO v_price FROM product WHERE product_id = p_product_id;
 
@@ -1212,8 +1443,8 @@ BEGIN
     VALUES (p_supplier_id, p_warehouse_id)
     RETURNING purchase_id INTO v_purchase_id;
 
-    INSERT INTO purchase_item(purchase_id, product_id, quantity, unit_cost)
-    VALUES (v_purchase_id, p_product_id, p_quantity, p_unit_cost);
+    INSERT INTO purchase_item(purchase_id, product_id, warehouse_id, quantity, unit_cost)
+    VALUES (v_purchase_id, p_product_id, p_warehouse_id, p_quantity, p_unit_cost);
 
     RAISE NOTICE 'Purchase % recorded successfully.', v_purchase_id;
 END;
@@ -1247,8 +1478,8 @@ BEGIN
     VALUES (p_supplier_id, p_warehouse_id)
     RETURNING purchase_id INTO v_purchase_id;
 
-    INSERT INTO purchase_item(purchase_id, product_id, quantity, unit_cost)
-    VALUES (v_purchase_id, p_product_id, p_quantity, p_unit_cost);
+    INSERT INTO purchase_item(purchase_id, product_id, warehouse_id, quantity, unit_cost)
+    VALUES (v_purchase_id, p_product_id, p_warehouse_id, p_quantity, p_unit_cost);
 
     RETURN v_purchase_id;
 END;

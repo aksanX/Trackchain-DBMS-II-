@@ -803,8 +803,18 @@ document.getElementById("product-form").addEventListener("submit", async (e) => 
     }
 });
 
+// Deleting a product is permanent and cascades: the database also deletes
+// every order line, purchase record, stock transfer, and campaign that
+// referenced it (schema.sql has ON DELETE CASCADE on product_id for
+// exactly this). There is no undo and no "discontinue instead" -- this IS
+// how a product gets removed from the business, at the cost of the history
+// tied to it going with it.
 async function deleteProduct(id) {
-    if (!confirm("Delete this product? This will fail if orders, inventory, purchases or campaigns still reference it.")) return;
+    if (!confirm(
+        "Permanently delete this product?\n\n" +
+        "This will ALSO permanently delete every order line, purchase record, " +
+        "stock transfer, and campaign that references it, and cannot be undone."
+    )) return;
     const { error } = await supabaseClient.from("product").delete().eq("product_id", id);
     const statusDiv = document.getElementById("product-status");
     if (error) {

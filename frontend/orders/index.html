@@ -130,14 +130,16 @@ async function loadOrders() {
     allOrders = (orders || []).map(o => {
         const items = o.order_item || [];
         const total = items.reduce((s, i) => s + i.quantity * Number(i.unit_price), 0);
-        const shipment = (o.shipment && o.shipment[0]) || null;
+        // shipment.order_id is UNIQUE, so Supabase embeds this as a single
+        // object (or null), not an array.
+        const shipment = o.shipment || null;
         return {
             order_id: o.order_id,
             order_date: o.order_date,
             customerName: o.customer?.name ?? "Unknown",
             items: items.map(i => ({ name: i.product?.name ?? "Product", quantity: i.quantity })),
             total,
-            platform: o.order_attribution?.[0]?.tracking_link?.platform ?? null,
+            platform: o.order_attribution?.tracking_link?.platform ?? null,
             shipmentStatus: shipment ? latestStatus[shipment.shipment_id] : null
         };
     });

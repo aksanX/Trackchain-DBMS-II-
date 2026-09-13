@@ -298,16 +298,26 @@ async function loadTopSuppliers() {
 // directly and summing per product here mirrors how Product Management
 // already reports a product's total stock, so a product only appears once
 // and only drops off once its real total clears the threshold.
+//
+// FIX: querying `inventory` alone also silently dropped any product that
+// has never been purchased into a warehouse at all -- it has zero
+// inventory ROWS, not just zero quantity, so it never appeared here even
+// though it's the most out-of-stock a product can possibly be. Starting
+// from `product` instead (like the Inventory page and low_stock_products()
+// already do) means a never-stocked product shows up correctly as 0.
 async function loadLowStock() {
-    const { data, error } = await supabaseClient
-        .from("inventory")
-        .select("product_id, quantity, product:product_id(name)");
+    const [{ data: products, error }, { data: inventory }] = await Promise.all([
+        supabaseClient.from("product").select("product_id, name"),
+        supabaseClient.from("inventory").select("product_id, quantity")
+    ]);
     if (error) return;
 
     const totals = {};
-    (data || []).forEach(r => {
-        if (!totals[r.product_id]) totals[r.product_id] = { name: r.product?.name ?? "-", quantity: 0 };
-        totals[r.product_id].quantity += r.quantity;
+    (products || []).forEach(p => {
+        totals[p.product_id] = { name: p.name, quantity: 0 };
+    });
+    (inventory || []).forEach(r => {
+        if (totals[r.product_id]) totals[r.product_id].quantity += r.quantity;
     });
 
     const rows = Object.values(totals)
